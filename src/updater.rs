@@ -7,11 +7,20 @@ const GITHUB_API_URL: &str = "https://api.github.com/repos/thichcode/teams-rust-
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct GitHubRelease {
     pub tag_name: String,
     pub name: Option<String>,
     pub html_url: String,
     pub body: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<ReleaseAsset>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +30,7 @@ pub enum UpdateStatus {
         current_version: String,
         latest_version: String,
         release_url: String,
+        download_url: Option<String>,
     },
     UpToDate {
         current_version: String,
@@ -37,10 +47,17 @@ impl UpdateChecker {
             Ok(Some(release)) => {
                 let latest = release.tag_name.trim_start_matches('v');
                 if is_newer_version(CURRENT_VERSION, latest) {
+                    let download_url = release
+                        .assets
+                        .iter()
+                        .find(|a| a.name.to_lowercase().ends_with(".exe"))
+                        .map(|a| a.browser_download_url.clone());
+
                     UpdateStatus::UpdateAvailable {
                         current_version: CURRENT_VERSION.to_string(),
                         latest_version: release.tag_name,
                         release_url: release.html_url,
+                        download_url,
                     }
                 } else {
                     UpdateStatus::UpToDate {
@@ -53,6 +70,65 @@ impl UpdateChecker {
             },
             Err(e) => UpdateStatus::CheckFailed(e.to_string()),
         }
+    }
+
+    /// Downloads the updated binary, spawns a detached script to overwrite and restart, then exits.
+    pub async fn download_and_install_update(download_url: &str) -> Result<()> {
+        let current_exe = std::env::current_exe().context("Failed to get current executable path")?;
+        let temp_dir = std::env::temp_dir();
+        let temp_exe = temp_dir.join("teams-rust-lite-update.exe");
+
+        log::info!("Downloading update from {} to {:?}", download_url, temp_exe);
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()?;
+
+        let resp = client
+            .get(download_url)
+            .header(USER_AGENT, "teams-rust-lite-updater")
+            .send()
+            .await
+            .context("Failed to send download request to update URL")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Download failed with HTTP status {}", resp.status());
+        }
+
+        let bytes = resp.bytes().await.context("Failed to read response body")?;
+        tokio::fs::write(&temp_exe, &bytes)
+            .await
+            .context("Failed to write downloaded executable to temp path")?;
+
+        log::info!("Update downloaded successfully ({} bytes). Spawning restart script...", bytes.len());
+
+        let current_exe_str = current_exe.to_string_lossy().to_string();
+        let temp_exe_str = temp_exe.to_string_lossy().to_string();
+
+        let script = format!(
+            "Start-Sleep -Milliseconds 600; Move-Item -Path '{temp}' -Destination '{target}' -Force; Start-Process '{target}'",
+            temp = temp_exe_str.replace('\'', "''"),
+            target = current_exe_str.replace('\'', "''")
+        );
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .context("Failed to spawn updater PowerShell process")?;
+        }
+
+        #[cfg(not(windows))]
+        {
+            anyhow::bail!("Auto-update is currently only supported on Windows");
+        }
+
+        std::process::exit(0);
     }
 
     async fn fetch_latest_release() -> Result<Option<GitHubRelease>> {

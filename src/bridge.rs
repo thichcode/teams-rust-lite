@@ -19,6 +19,7 @@ pub enum UiCommand {
     SendMessage { conversation_id: String, text: String },
     CheckForUpdates,
     OpenUpdateUrl,
+    InstallUpdate,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ pub enum CoreEvent {
     ConnectionStatusChanged { status: String, is_connected: bool },
     ErrorOccurred(String),
     UpdateResult(crate::updater::UpdateStatus),
+    UpdateProgress(String),
 }
 
 pub struct CoreWorker {
@@ -42,6 +44,7 @@ pub struct CoreWorker {
     chat_client: Option<Arc<tokio::sync::Mutex<TeamsChatClient>>>,
     current_conversation_id: Option<String>,
     latest_update_url: Option<String>,
+    latest_download_url: Option<String>,
 }
 
 impl CoreWorker {
@@ -53,6 +56,7 @@ impl CoreWorker {
             chat_client: None,
             current_conversation_id: None,
             latest_update_url: None,
+            latest_download_url: None,
         }
     }
 
@@ -105,8 +109,9 @@ impl CoreWorker {
                 }
                 UiCommand::CheckForUpdates => {
                     let status = crate::updater::UpdateChecker::check().await;
-                    if let crate::updater::UpdateStatus::UpdateAvailable { ref release_url, .. } = status {
+                    if let crate::updater::UpdateStatus::UpdateAvailable { ref release_url, ref download_url, .. } = status {
                         self.latest_update_url = Some(release_url.clone());
+                        self.latest_download_url = download_url.clone();
                     }
                     let _ = self.tx_event.send(CoreEvent::UpdateResult(status)).await;
                 }
@@ -114,6 +119,17 @@ impl CoreWorker {
                     let url = self.latest_update_url.clone()
                         .unwrap_or_else(|| "https://github.com/thichcode/teams-rust-lite/releases".to_string());
                     let _ = open::that(&url);
+                }
+                UiCommand::InstallUpdate => {
+                    if let Some(ref download_url) = self.latest_download_url {
+                        let _ = self.tx_event.send(CoreEvent::UpdateProgress("Đang tải bản cập nhật...".into())).await;
+                        if let Err(e) = crate::updater::UpdateChecker::download_and_install_update(download_url).await {
+                            log::error!("Failed to install update: {}", e);
+                            let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("Cập nhật thất bại: {}", e))).await;
+                        }
+                    } else if let Some(ref release_url) = self.latest_update_url {
+                        let _ = open::that(release_url);
+                    }
                 }
             }
         }
@@ -384,6 +400,14 @@ pub fn attach_ui_bridge(
         });
     });
 
+    let tx_install_update = tx_cmd.clone();
+    window.on_install_update(move || {
+        let tx = tx_install_update.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::InstallUpdate).await;
+        });
+    });
+
     // Listen to CoreEvents and update Slint UI via invoke_from_event_loop
     let weak_events = weak_window.clone();
     tokio::spawn(async move {
@@ -528,5 +552,10 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
                 );
             }
         },
+        CoreEvent::UpdateProgress(msg) => {
+            win.set_login_status(msg.clone().into());
+            win.set_update_info_text(msg.clone().into());
+            win.set_connection_status(msg.into());
+        }
     }
 }

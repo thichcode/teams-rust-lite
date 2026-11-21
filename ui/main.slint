@@ -62,6 +62,7 @@ export component MainWindow inherits Window {
     callback trigger-refresh();
     callback check-for-updates();
     callback open-update-url();
+    callback install-update();
     callback toggle-theme-mode();
 
     if !is-logged-in: LoginView {
@@ -78,6 +79,7 @@ export component MainWindow inherits Window {
         toggle-theme => { root.toggle-theme-mode(); }
         check-update => { root.check-for-updates(); }
         open-update => { root.open-update-url(); }
+        install-update => { root.install-update(); }
     }
 
     if is-logged-in: HorizontalLayout {
@@ -174,19 +176,32 @@ export component MainWindow inherits Window {
 
                         // Update Check button
                         touch-main-update := TouchArea {
-                            width: 28px;
                             height: 28px;
                             clicked => { root.check-for-updates(); }
                             Rectangle {
                                 border-radius: 4px;
-                                background: touch-main-update.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
-                                Text {
-                                    text: "⇪";
-                                    color: root.is-update-available ? #ffd700 : #ffffff;
-                                    font-size: 18px;
-                                    font-weight: 700;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                background: touch-main-update.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : (root.is-update-available ? #7d6608 : transparent);
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 4px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: root.is-update-available ? "⚡" : "⇪";
+                                        color: root.is-update-available ? #ffd700 : #ffffff;
+                                        font-size: 14px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if root.is-update-available: Text {
+                                        text: "Update";
+                                        color: #ffd700;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }
@@ -237,7 +252,7 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 // Update banner
                 if root.is-update-available: Rectangle {
-                    height: 38px;
+                    height: 42px;
                     background: root.is-dark-theme ? #382d00 : #fffbe6;
                     border-width: 1px;
                     border-color: root.is-dark-theme ? #665000 : #ffe58f;
@@ -245,7 +260,7 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding-left: 16px;
                         padding-right: 16px;
-                        spacing: 12px;
+                        spacing: 10px;
                         alignment: center;
 
                         Text {
@@ -254,10 +269,17 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             font-weight: 600;
                             horizontal-stretch: 1;
+                            overflow: elide;
                         }
 
                         Button {
-                            text: "Download Update";
+                            text: "⚡ Cập nhật ngay";
+                            primary: true;
+                            clicked => { root.install-update(); }
+                        }
+
+                        Button {
+                            text: "Chi tiết";
                             clicked => { root.open-update-url(); }
                         }
                     }

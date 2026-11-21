@@ -17,6 +17,7 @@ export component LoginView inherits Rectangle {
     callback toggle-theme();
     callback check-update();
     callback open-update();
+    callback install-update();
 
     background: root.is-dark-theme ? #1f1f1f : #f5f5f7;
 
@@ -62,19 +63,35 @@ export component LoginView inherits Rectangle {
 
                 // Update Checker Button
                 touch-update := TouchArea {
-                    width: 32px;
                     height: 32px;
                     clicked => { root.check-update(); }
                     Rectangle {
                         border-radius: 6px;
-                        background: touch-update.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : transparent;
-                        Text {
-                            text: "⇪";
-                            color: root.is-update-available ? #ffd700 : (root.is-dark-theme ? #ffffff : #555555);
-                            font-size: 18px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        background: touch-update.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : (root.is-dark-theme ? #28282c : #ebebee);
+                        border-width: 1px;
+                        border-color: root.is-update-available ? #ffd700 : (root.is-dark-theme ? #3e3e42 : #d0d0d5);
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            alignment: center;
+
+                            Text {
+                                text: root.is-update-available ? "⚡" : "⇪";
+                                color: root.is-update-available ? #ffd700 : (root.is-dark-theme ? #ffffff : #333333);
+                                font-size: 14px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: root.is-update-available ? "Có bản mới!" : "Kiểm tra cập nhật";
+                                color: root.is-update-available ? (root.is-dark-theme ? #ffd700 : #b8860b) : (root.is-dark-theme ? #cccccc : #444444);
+                                font-size: 12px;
+                                font-weight: root.is-update-available ? 700 : 500;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
@@ -87,8 +104,8 @@ export component LoginView inherits Rectangle {
             padding-bottom: 12px;
 
             Rectangle {
-                width: 440px;
-                height: 38px;
+                width: 520px;
+                height: 42px;
                 border-radius: 8px;
                 background: root.is-dark-theme ? #382d00 : #fffbe6;
                 border-width: 1px;
@@ -110,7 +127,13 @@ export component LoginView inherits Rectangle {
                     }
 
                     Button {
-                        text: "Download";
+                        text: "⚡ Cập nhật ngay";
+                        primary: true;
+                        clicked => { root.install-update(); }
+                    }
+
+                    Button {
+                        text: "Chi tiết";
                         clicked => { root.open-update(); }
                     }
                 }
