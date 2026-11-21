@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 mod auth;
 mod bridge;
+mod solar;
 mod teams;
 mod updater;
 mod windows_os;
@@ -22,6 +23,50 @@ async fn main() -> Result<()> {
 
     // Initialize UI Window
     let main_window = MainWindow::new()?;
+
+    // Initialize Solar Dynamic Theme (Auto switch light/dark based on sunrise/sunset)
+    let current_theme_mode = Arc::new(std::sync::Mutex::new(solar::ThemeMode::AutoSolar));
+    let initial_is_dark = solar::should_be_dark_theme(solar::ThemeMode::AutoSolar);
+    main_window.set_is_dark_theme(initial_is_dark);
+    main_window.set_theme_mode_icon(solar::ThemeMode::AutoSolar.icon().into());
+
+    // Hook up Theme Mode toggle callback
+    let weak_theme_win = main_window.as_weak();
+    let theme_mode_toggle = current_theme_mode.clone();
+    main_window.on_toggle_theme_mode(move || {
+        if let Ok(mut mode) = theme_mode_toggle.lock() {
+            *mode = mode.next();
+            let is_dark = solar::should_be_dark_theme(*mode);
+            let icon = mode.icon();
+            log::info!("Switched theme mode to: {:?} (is_dark: {})", *mode, is_dark);
+            if let Some(win) = weak_theme_win.upgrade() {
+                win.set_is_dark_theme(is_dark);
+                win.set_theme_mode_icon(icon.into());
+            }
+        }
+    });
+
+    // Periodic Solar Timer: checks every 60s and updates theme if in Auto mode
+    let solar_timer = slint::Timer::default();
+    let weak_solar_win = main_window.as_weak();
+    let theme_mode_solar = current_theme_mode.clone();
+    solar_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(60),
+        move || {
+            if let Ok(mode) = theme_mode_solar.lock() {
+                if *mode == solar::ThemeMode::AutoSolar {
+                    let is_dark = solar::should_be_dark_theme(solar::ThemeMode::AutoSolar);
+                    if let Some(win) = weak_solar_win.upgrade() {
+                        if win.get_is_dark_theme() != is_dark {
+                            log::info!("Auto solar theme transition triggered: is_dark = {}", is_dark);
+                            win.set_is_dark_theme(is_dark);
+                        }
+                    }
+                }
+            }
+        },
+    );
 
     // Setup Communication Channels
     let (tx_cmd, rx_cmd) = mpsc::channel(100);

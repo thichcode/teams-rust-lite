@@ -210,6 +210,7 @@ impl OAuthManager {
         })
     }
 
+    #[allow(dead_code)]
     async fn fetch_user_profile(&self, access_token: &str) -> Result<GraphMeResponse> {
         let resp = self.http_client
             .get("https://graph.microsoft.com/v1.0/me")

@@ -3,6 +3,7 @@ export component MessageBubble inherits Rectangle {
     in property <string> content: "Hello world!";
     in property <string> timestamp: "12:00 PM";
     in property <bool> is-self: false;
+    in property <bool> is-dark-theme: false;
 
     background: transparent;
 
@@ -16,7 +17,7 @@ export component MessageBubble inherits Rectangle {
         Rectangle {
             max-width: 480px;
             border-radius: 12px;
-            background: is-self ? #5b5fc7 : #f0f0f4;
+            background: is-self ? (is-dark-theme ? #6264a7 : #5b5fc7) : (is-dark-theme ? #2d2d33 : #f0f0f4);
 
             VerticalLayout {
                 padding-left: 12px;
@@ -29,20 +30,20 @@ export component MessageBubble inherits Rectangle {
                     text: root.sender-name;
                     font-size: 11px;
                     font-weight: 700;
-                    color: #5b5fc7;
+                    color: is-dark-theme ? #9da1f5 : #5b5fc7;
                 }
 
                 Text {
                     text: root.content;
                     font-size: 13px;
-                    color: is-self ? #ffffff : #1f1f1f;
+                    color: is-self ? #ffffff : (is-dark-theme ? #f2f2f2 : #1f1f1f);
                     wrap: word-wrap;
                 }
 
                 Text {
                     text: root.timestamp;
                     font-size: 10px;
-                    color: is-self ? #e0e2ff : #8a8a8a;
+                    color: is-self ? #e0e2ff : (is-dark-theme ? #9e9e9e : #8a8a8a);
                     horizontal-alignment: is-self ? right : left;
                 }
             }
