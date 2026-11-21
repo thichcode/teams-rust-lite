@@ -68,8 +68,16 @@ export component MainWindow inherits Window {
         status-text: root.login-status;
         is-loading: root.is-authenticating;
         user-code: root.login-user-code;
+        app-version: root.app-version;
+        is-dark-theme: root.is-dark-theme;
+        theme-mode-icon: root.theme-mode-icon;
+        is-update-available: root.is-update-available;
+        update-info-text: root.update-info-text;
         start-login => { root.start-login(); }
         open-browser-login => { root.open-browser-login(); }
+        toggle-theme => { root.toggle-theme-mode(); }
+        check-update => { root.check-for-updates(); }
+        open-update => { root.open-update-url(); }
     }
 
     if is-logged-in: HorizontalLayout {

@@ -6,134 +6,242 @@ export component LoginView inherits Rectangle {
     in property <string> user-code: "";
     in property <string> verification-url: "https://microsoft.com/devicelogin";
     
+    in property <string> app-version: "v0.1.0";
+    in property <bool> is-dark-theme: false;
+    in property <string> theme-mode-icon: "🔄";
+    in property <bool> is-update-available: false;
+    in property <string> update-info-text: "";
+
     callback start-login();
     callback open-browser-login();
+    callback toggle-theme();
+    callback check-update();
+    callback open-update();
 
-    background: #f5f5f7;
+    background: root.is-dark-theme ? #1f1f1f : #f5f5f7;
 
     VerticalLayout {
-        alignment: center;
-        spacing: 24px;
-        padding: 32px;
-
-        // Logo & Title
-        VerticalLayout {
-            alignment: center;
-            spacing: 8px;
-
-            Rectangle {
-                width: 64px;
-                height: 64px;
-                border-radius: 16px;
-                background: #5b5fc7;
-
-                Text {
-                    text: "T";
-                    font-size: 36px;
-                    font-weight: 800;
-                    color: #ffffff;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            Text {
-                text: "Microsoft Teams Lite";
-                font-size: 24px;
-                font-weight: 700;
-                color: #242424;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Native Windows Client (Slint + Rust)";
-                font-size: 13px;
-                color: #616161;
-                horizontal-alignment: center;
-            }
-        }
-
-        // Info / Login card
+        // Top Toolbar on Home/Login page
         Rectangle {
-            max-width: 440px;
-            border-radius: 12px;
-            background: #ffffff;
-            border-width: 1px;
-            border-color: #e5e5e5;
+            height: 48px;
+            background: transparent;
 
-            VerticalLayout {
-                padding: 24px;
-                spacing: 16px;
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 12px;
+                alignment: end;
 
-                if root.user-code == "": VerticalLayout {
-                    spacing: 16px;
-
+                // Version label
+                HorizontalLayout {
+                    alignment: center;
                     Text {
-                        text: root.status-text;
-                        font-size: 13px;
-                        color: #424242;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
-
-                    Button {
-                        text: root.is-loading ? "Requesting sign-in..." : "Sign in with Microsoft";
-                        enabled: !root.is-loading;
-                        primary: true;
-                        clicked => { root.start-login(); }
+                        text: root.app-version;
+                        font-size: 11px;
+                        color: root.is-dark-theme ? #888888 : #999999;
+                        vertical-alignment: center;
                     }
                 }
 
-                if root.user-code != "": VerticalLayout {
-                    spacing: 14px;
-                    alignment: center;
-
-                    Text {
-                        text: "Enter this code in the Microsoft sign-in page:";
-                        font-size: 13px;
-                        color: #555555;
-                        horizontal-alignment: center;
-                    }
-
-                    // Prominent Code Box
+                // Theme Mode Switcher
+                TouchArea {
+                    width: 32px;
+                    height: 32px;
+                    clicked => { root.toggle-theme(); }
                     Rectangle {
-                        height: 52px;
-                        border-radius: 8px;
-                        background: #f0f1ff;
-                        border-width: 2px;
-                        border-color: #5b5fc7;
-
+                        border-radius: 6px;
+                        background: touch-theme.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : transparent;
+                        touch-theme := TouchArea {}
                         Text {
-                            text: root.user-code;
-                            font-size: 24px;
-                            font-weight: 800;
-                            color: #5b5fc7;
+                            text: root.theme-mode-icon;
+                            font-size: 16px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
                     }
+                }
 
-                    Text {
-                        text: root.status-text;
-                        font-size: 12px;
-                        color: #666666;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
-
-                    Button {
-                        text: "Open Browser Again";
-                        clicked => { root.open-browser-login(); }
+                // Update Checker Button
+                TouchArea {
+                    width: 32px;
+                    height: 32px;
+                    clicked => { root.check-update(); }
+                    Rectangle {
+                        border-radius: 6px;
+                        background: touch-update.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : transparent;
+                        touch-update := TouchArea {}
+                        Text {
+                            text: "⇪";
+                            color: root.is-update-available ? #ffd700 : (root.is-dark-theme ? #ffffff : #555555);
+                            font-size: 18px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
         }
 
-        Text {
-            text: "Fast, resource-efficient (<60MB RAM), native toast notifications";
-            font-size: 11px;
-            color: #8a8a8a;
-            horizontal-alignment: center;
+        // Update Notification Banner (if update available)
+        if root.is-update-available: HorizontalLayout {
+            alignment: center;
+            padding-bottom: 12px;
+
+            Rectangle {
+                width: 440px;
+                height: 38px;
+                border-radius: 8px;
+                background: root.is-dark-theme ? #382d00 : #fffbe6;
+                border-width: 1px;
+                border-color: root.is-dark-theme ? #665000 : #ffe58f;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
+                    alignment: center;
+
+                    Text {
+                        text: root.update-info-text;
+                        color: root.is-dark-theme ? #ffd666 : #ad6800;
+                        font-size: 12px;
+                        font-weight: 600;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Button {
+                        text: "Download";
+                        clicked => { root.open-update(); }
+                    }
+                }
+            }
+        }
+
+        // Main Center Area (Logo, Titles, and Card)
+        VerticalLayout {
+            alignment: center;
+            spacing: 24px;
+            vertical-stretch: 1;
+
+            // Logo & Title Section (All Centered Horizontally)
+            VerticalLayout {
+                spacing: 10px;
+
+                // App Icon Logo
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("../assets/icon.png");
+                        width: 72px;
+                        height: 72px;
+                    }
+                }
+
+                Text {
+                    text: "Microsoft Teams Lite";
+                    font-size: 26px;
+                    font-weight: 700;
+                    color: root.is-dark-theme ? #f5f5f5 : #242424;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Native Windows Client (Slint + Rust)";
+                    font-size: 13px;
+                    color: root.is-dark-theme ? #a0a0a0 : #616161;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Info & Login Card (Centered Horizontally)
+            HorizontalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 420px;
+                    border-radius: 14px;
+                    background: root.is-dark-theme ? #29292d : #ffffff;
+                    border-width: 1px;
+                    border-color: root.is-dark-theme ? #38383f : #e5e5e8;
+
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 16px;
+
+                        if root.user-code == "": VerticalLayout {
+                            spacing: 16px;
+
+                            Text {
+                                text: root.status-text;
+                                font-size: 13px;
+                                color: root.is-dark-theme ? #cccccc : #424242;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+
+                            Button {
+                                text: root.is-loading ? "Requesting sign-in..." : "Sign in with Microsoft";
+                                enabled: !root.is-loading;
+                                primary: true;
+                                clicked => { root.start-login(); }
+                            }
+                        }
+
+                        if root.user-code != "": VerticalLayout {
+                            spacing: 14px;
+                            alignment: center;
+
+                            Text {
+                                text: "Enter this code in the Microsoft sign-in page:";
+                                font-size: 13px;
+                                color: root.is-dark-theme ? #cccccc : #555555;
+                                horizontal-alignment: center;
+                            }
+
+                            // Prominent Code Box
+                            Rectangle {
+                                height: 52px;
+                                border-radius: 8px;
+                                background: root.is-dark-theme ? #3b3d68 : #f0f1ff;
+                                border-width: 2px;
+                                border-color: root.is-dark-theme ? #6264a7 : #5b5fc7;
+
+                                Text {
+                                    text: root.user-code;
+                                    font-size: 24px;
+                                    font-weight: 800;
+                                    color: root.is-dark-theme ? #ffffff : #5b5fc7;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: root.status-text;
+                                font-size: 12px;
+                                color: root.is-dark-theme ? #a0a0a0 : #666666;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+
+                            Button {
+                                text: "Open Browser Again";
+                                clicked => { root.open-browser-login(); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer note
+            Text {
+                text: "Ultra-fast (<0.4s startup), low memory (<60MB RAM), native toast notifications";
+                font-size: 11px;
+                color: root.is-dark-theme ? #777777 : #8a8a8a;
+                horizontal-alignment: center;
+            }
         }
     }
 }
