@@ -44,12 +44,18 @@ export component MainWindow inherits Window {
     in property <[MessageData]> messages: [];
     in-out property <string> draft-text: "";
 
+    in property <string> app-version: "v0.1.0";
+    in property <bool> is-update-available: false;
+    in property <string> update-info-text: "";
+
     callback start-login();
     callback open-browser-login();
     callback logout();
     callback select-conversation(string);
     callback send-message(string);
     callback trigger-refresh();
+    callback check-for-updates();
+    callback open-update-url();
 
     if !is-logged-in: LoginView {
         status-text: root.login-status;
@@ -127,6 +133,20 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                             }
                         }
+
+                        TouchArea {
+                            width: 24px;
+                            height: 24px;
+                            clicked => { root.check-for-updates(); }
+                            Text {
+                                text: "⇪";
+                                color: root.is-update-available ? #ffd700 : #ffffff;
+                                font-size: 18px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
 
@@ -171,6 +191,34 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
 
             VerticalLayout {
+                // Update banner
+                if root.is-update-available: Rectangle {
+                    height: 38px;
+                    background: #fffbe6;
+                    border-width: 1px;
+                    border-color: #ffe58f;
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 12px;
+                        alignment: center;
+
+                        Text {
+                            text: root.update-info-text;
+                            color: #ad6800;
+                            font-size: 12px;
+                            font-weight: 600;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: "Download Update";
+                            clicked => { root.open-update-url(); }
+                        }
+                    }
+                }
+
                 // Chat header
                 Rectangle {
                     height: 56px;

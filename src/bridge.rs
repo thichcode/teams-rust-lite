@@ -17,6 +17,8 @@ pub enum UiCommand {
     RefreshConversations,
     SelectConversation(String),
     SendMessage { conversation_id: String, text: String },
+    CheckForUpdates,
+    OpenUpdateUrl,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +32,7 @@ pub enum CoreEvent {
     NewMessageReceived(ChatMessage),
     ConnectionStatusChanged { status: String, is_connected: bool },
     ErrorOccurred(String),
+    UpdateResult(crate::updater::UpdateStatus),
 }
 
 pub struct CoreWorker {
@@ -38,6 +41,7 @@ pub struct CoreWorker {
     token: Option<TokenData>,
     chat_client: Option<Arc<tokio::sync::Mutex<TeamsChatClient>>>,
     current_conversation_id: Option<String>,
+    latest_update_url: Option<String>,
 }
 
 impl CoreWorker {
@@ -48,6 +52,7 @@ impl CoreWorker {
             token: None,
             chat_client: None,
             current_conversation_id: None,
+            latest_update_url: None,
         }
     }
 
@@ -97,6 +102,18 @@ impl CoreWorker {
                 }
                 UiCommand::SendMessage { conversation_id, text } => {
                     self.send_message(&conversation_id, &text).await;
+                }
+                UiCommand::CheckForUpdates => {
+                    let status = crate::updater::UpdateChecker::check().await;
+                    if let crate::updater::UpdateStatus::UpdateAvailable { ref release_url, .. } = status {
+                        self.latest_update_url = Some(release_url.clone());
+                    }
+                    let _ = self.tx_event.send(CoreEvent::UpdateResult(status)).await;
+                }
+                UiCommand::OpenUpdateUrl => {
+                    let url = self.latest_update_url.clone()
+                        .unwrap_or_else(|| "https://github.com/thichcode/teams-rust-lite/releases".to_string());
+                    let _ = open::that(&url);
                 }
             }
         }
@@ -332,6 +349,22 @@ pub fn attach_ui_bridge(
         }
     });
 
+    let tx_check_update = tx_cmd.clone();
+    window.on_check_for_updates(move || {
+        let tx = tx_check_update.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::CheckForUpdates).await;
+        });
+    });
+
+    let tx_open_update = tx_cmd.clone();
+    window.on_open_update_url(move || {
+        let tx = tx_open_update.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::OpenUpdateUrl).await;
+        });
+    });
+
     // Listen to CoreEvents and update Slint UI via invoke_from_event_loop
     let weak_events = weak_window.clone();
     tokio::spawn(async move {
@@ -440,5 +473,24 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
         CoreEvent::ErrorOccurred(err) => {
             win.set_connection_status(format!("Error: {}", err).into());
         }
+        CoreEvent::UpdateResult(status) => match status {
+            crate::updater::UpdateStatus::UpdateAvailable { latest_version, .. } => {
+                win.set_is_update_available(true);
+                win.set_update_info_text(format!("New version {} available!", latest_version).into());
+                WindowsNotifier::notify_chat_message(
+                    "Update Available",
+                    "Teams Lite",
+                    &format!("Version {} is available. Click to download!", latest_version),
+                );
+            }
+            crate::updater::UpdateStatus::UpToDate { current_version } => {
+                win.set_is_update_available(false);
+                win.set_connection_status(format!("Up to date (v{})", current_version).into());
+            }
+            crate::updater::UpdateStatus::CheckFailed(err) => {
+                log::warn!("Check for updates failed: {}", err);
+                win.set_connection_status(format!("Update check failed").into());
+            }
+        },
     }
 }

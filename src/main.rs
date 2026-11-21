@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 mod auth;
 mod bridge;
 mod teams;
+mod updater;
 mod windows_os;
 
 slint::include_modules!();
