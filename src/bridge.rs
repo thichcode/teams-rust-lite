@@ -260,11 +260,17 @@ impl CoreWorker {
             let client = client_lock.lock().await;
             match client.get_conversations().await {
                 Ok(conversations) => {
+                    let count = conversations.len();
+                    log::info!("Successfully loaded {} conversations", count);
                     let _ = self.tx_event.send(CoreEvent::ConversationsLoaded(conversations)).await;
+                    let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+                        status: format!("Connected ({} chats)", count),
+                        is_connected: true,
+                    }).await;
                 }
                 Err(e) => {
                     log::warn!("Failed to fetch conversations: {}", e);
-                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("Failed to load chats: {}", e))).await;
+                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("{}", e))).await;
                 }
             }
         }
@@ -515,6 +521,7 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
         }
         CoreEvent::ErrorOccurred(err) => {
             win.set_connection_status(format!("Error: {}", err).into());
+            win.set_is_connected(false);
         }
         CoreEvent::UpdateResult(status) => match status {
             crate::updater::UpdateStatus::UpdateAvailable { latest_version, .. } => {

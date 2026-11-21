@@ -25,11 +25,15 @@ impl TeamsChatClient {
             .to_string();
 
         let mut headers = HeaderMap::new();
-        headers.insert("BehaviorOverride", HeaderValue::from_static("redirectAs404"));
         headers.insert("ClientInfo", HeaderValue::from_static("os=windows; osVer=10; app=teams-rust-lite; appVer=1.0.0"));
+        headers.insert("Accept", HeaderValue::from_static("application/json, text/plain, */*"));
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Teams/1.5.00.0 Chrome/100.0.4896.127 Electron/19.1.9 Safari/537.36"),
+        );
 
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(25))
             .default_headers(headers)
             .build()
             .unwrap_or_default();
@@ -75,6 +79,20 @@ impl TeamsChatClient {
 
         log::info!("Successfully acquired SkypeToken from authsvc (len: {})", skype_token.len());
         self.skype_token = Some(skype_token.clone());
+
+        // Extract regional chatService URL if provided by authsvc
+        let chat_svc_url = body.get("chatServiceUri")
+            .and_then(|v| v.as_str())
+            .or_else(|| body.get("chatService").and_then(|v| v.as_str()))
+            .or_else(|| body.get("services").and_then(|s| s.get("chatService")).and_then(|v| v.as_str()))
+            .or_else(|| body.get("services").and_then(|s| s.get("chatServiceUri")).and_then(|v| v.as_str()));
+
+        if let Some(endpoint) = chat_svc_url {
+            let clean_endpoint = endpoint.trim_end_matches('/').to_string();
+            log::info!("Updating chatsvc base_url to regional endpoint from authsvc: {}", clean_endpoint);
+            self.base_url = clean_endpoint;
+        }
+
         Ok(skype_token)
     }
 
@@ -84,14 +102,13 @@ impl TeamsChatClient {
 
     /// Prepares request builder with required Teams authentication headers
     fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        req = req.header(AUTHORIZATION, format!("Bearer {}", self.access_token));
         if let Some(ref skype_tok) = self.skype_token {
             req = req
-                .header("Authentication", format!("skypetoken_asm {}", skype_tok))
-                .header("x-skypetoken", skype_tok.as_str());
+                .header("x-skypetoken", skype_tok.as_str())
+                .header("Authentication", format!("skypetoken_asm {}", skype_tok));
         } else {
-            req = req
-                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
-                .header("Authentication", format!("Bearer {}", self.access_token));
+            req = req.header("Authentication", format!("Bearer {}", self.access_token));
         }
         req
     }
@@ -109,7 +126,8 @@ impl TeamsChatClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
-            bail!("chatsvc get_conversations failed (HTTP {}): {}", status, err_body);
+            log::error!("chatsvc get_conversations error (HTTP {}): {}", status, err_body);
+            bail!("chatsvc HTTP {}: {}", status, err_body);
         }
 
         let body: ConversationListResponse = resp.json().await.context("Failed to parse conversations JSON")?;

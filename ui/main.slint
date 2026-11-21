@@ -165,9 +165,8 @@ export component MainWindow inherits Window {
                                 border-radius: 4px;
                                 background: touch-main-refresh.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
                                 Text {
-                                    text: "↻";
-                                    color: #ffffff;
-                                    font-size: 18px;
+                                    text: "🔄";
+                                    font-size: 14px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -188,10 +187,8 @@ export component MainWindow inherits Window {
                                     alignment: center;
 
                                     Text {
-                                        text: root.is-update-available ? "⚡" : "⇪";
-                                        color: root.is-update-available ? #ffd700 : #ffffff;
+                                        text: "⚡";
                                         font-size: 14px;
-                                        font-weight: 700;
                                         vertical-alignment: center;
                                     }
 
@@ -237,6 +234,28 @@ export component MainWindow inherits Window {
                             is-dark-theme: root.is-dark-theme;
                             clicked => {
                                 root.select-conversation(conv.id);
+                            }
+                        }
+
+                        if !root.is-connected: VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+                            alignment: center;
+
+                            Text {
+                                text: root.connection-status;
+                                color: root.is-dark-theme ? #ff8888 : #cc2222;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "Thử lại (Retry)";
+                                    clicked => { root.trigger-refresh(); }
+                                }
                             }
                         }
                     }

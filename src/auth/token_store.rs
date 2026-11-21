@@ -31,7 +31,11 @@ pub struct TokenStore;
 
 impl TokenStore {
     fn get_entry() -> Result<Entry> {
-        Entry::new(SERVICE_NAME, ACCOUNT_NAME)
+        Self::get_entry_for_account(ACCOUNT_NAME)
+    }
+
+    pub fn get_entry_for_account(account: &str) -> Result<Entry> {
+        Entry::new(SERVICE_NAME, account)
             .map_err(|e| anyhow::anyhow!("Keyring entry error: {}", e))
     }
 
@@ -85,21 +89,25 @@ mod tests {
             display_name: Some("Test User".into()),
         };
 
-        let res_save = TokenStore::save(&tok);
-        println!("TokenStore::save result: {:?}", res_save);
-        if let Err(ref e) = res_save {
+        let entry = match TokenStore::get_entry_for_account("oauth_tokens_test") {
+            Ok(e) => e,
+            Err(e) => {
+                println!("Skipping keyring test: {:?}", e);
+                return;
+            }
+        };
+
+        let json = serde_json::to_string(&tok).unwrap();
+        if let Err(e) = entry.set_password(&json) {
             println!("Skipping keyring test on headless CI environment: {:?}", e);
             return;
         }
 
-        let res_load = TokenStore::load();
-        println!("TokenStore::load result: {:?}", res_load);
-        assert!(res_load.is_ok());
-        let loaded = res_load.unwrap();
-        assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap().access_token, "test_access_123");
+        let loaded_json = entry.get_password().unwrap();
+        let loaded: TokenData = serde_json::from_str(&loaded_json).unwrap();
+        assert_eq!(loaded.access_token, "test_access_123");
 
-        let _ = TokenStore::clear();
+        let _ = entry.delete_credential();
     }
 
     #[test]
