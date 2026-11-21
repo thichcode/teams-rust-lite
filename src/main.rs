@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
 
     // Initialize UI Window
     let main_window = MainWindow::new()?;
+    main_window.set_app_version(crate::updater::CURRENT_VERSION.into());
 
     // Initialize Solar Dynamic Theme (Auto switch light/dark based on sunrise/sunset)
     let current_theme_mode = Arc::new(std::sync::Mutex::new(solar::ThemeMode::AutoSolar));

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
 use serde::Deserialize;
 
-pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT_VERSION: &str = env!("APP_VERSION");
 const GITHUB_API_URL: &str = "https://api.github.com/repos/thichcode/teams-rust-lite/releases/latest";
 
 #[derive(Debug, Clone, Deserialize)]

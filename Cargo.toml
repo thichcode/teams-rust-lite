@@ -1,6 +1,6 @@
 [package]
 name = "teams-rust-lite"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Lightweight native Windows client for Microsoft Teams"
 authors = ["Teams Rust Lite Authors"]
