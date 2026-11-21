@@ -48,13 +48,13 @@ impl TokenStore {
         let entry = Self::get_entry()?;
         match entry.get_password() {
             Ok(json) => {
+                println!("Keyring get_password SUCCESS, length: {}", json.len());
                 let data: TokenData = serde_json::from_str(&json)
                     .context("Failed to deserialize tokens from keyring")?;
                 Ok(Some(data))
             }
-            Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => {
-                log::warn!("Could not read from keyring: {}", e);
+                println!("Keyring get_password returned: {:?}", e);
                 Ok(None)
             }
         }
@@ -73,6 +73,31 @@ impl TokenStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_keyring_save_load() {
+        let tok = TokenData {
+            access_token: "test_access_123".into(),
+            refresh_token: Some("test_refresh_123".into()),
+            expires_at: 9999999999,
+            user_id: Some("uid".into()),
+            user_email: Some("a@b.com".into()),
+            display_name: Some("Test User".into()),
+        };
+
+        let res_save = TokenStore::save(&tok);
+        println!("TokenStore::save result: {:?}", res_save);
+        assert!(res_save.is_ok(), "Failed to save: {:?}", res_save);
+
+        let res_load = TokenStore::load();
+        println!("TokenStore::load result: {:?}", res_load);
+        assert!(res_load.is_ok());
+        let loaded = res_load.unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().access_token, "test_access_123");
+
+        let _ = TokenStore::clear();
+    }
 
     #[test]
     fn test_token_expiration() {

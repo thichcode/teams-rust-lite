@@ -8,15 +8,17 @@ use std::time::Duration;
 use super::models::{ChatMessage, ChatMessageListResponse, Conversation, ConversationListResponse, SendMessageRequest};
 
 pub const DEFAULT_CHATSVC_URL: &str = "https://chatsvcagg.teams.microsoft.com";
+pub const DEFAULT_AUTHSVC_URL: &str = "https://authsvc.teams.microsoft.com/v1.0/authz";
 
 pub struct TeamsChatClient {
     base_url: String,
     http_client: Client,
-    token: String,
+    access_token: String,
+    skype_token: Option<String>,
 }
 
 impl TeamsChatClient {
-    pub fn new(token: String, custom_base_url: Option<String>) -> Self {
+    pub fn new(access_token: String, custom_base_url: Option<String>) -> Self {
         let base_url = custom_base_url
             .unwrap_or_else(|| DEFAULT_CHATSVC_URL.to_string())
             .trim_end_matches('/')
@@ -35,33 +37,71 @@ impl TeamsChatClient {
         Self {
             base_url,
             http_client,
-            token,
+            access_token,
+            skype_token: None,
         }
     }
 
-    pub fn set_token(&mut self, token: String) {
-        self.token = token;
+    /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
+    pub async fn exchange_skype_token(&mut self) -> Result<String> {
+        let resp = self.http_client
+            .post(DEFAULT_AUTHSVC_URL)
+            .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+            .header(CONTENT_TYPE, "application/json")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .context("Failed to connect to Teams authsvc")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            bail!("authsvc token exchange failed (HTTP {}): {}", status, err_body);
+        }
+
+        let body: serde_json::Value = resp.json().await.context("Failed to parse authsvc response")?;
+        
+        // Extract skypeToken from tokens object or root
+        let token_opt = body.get("tokens")
+            .and_then(|t| t.get("skypeToken"))
+            .and_then(|s| s.as_str())
+            .or_else(|| body.get("skypeToken").and_then(|s| s.as_str()))
+            .map(|s| s.to_string());
+
+        let skype_token = match token_opt {
+            Some(tok) => tok,
+            None => bail!("authsvc response did not contain a skypeToken: {}", body),
+        };
+
+        log::info!("Successfully acquired SkypeToken from authsvc (len: {})", skype_token.len());
+        self.skype_token = Some(skype_token.clone());
+        Ok(skype_token)
     }
 
-    fn auth_header(&self) -> String {
-        if self.token.starts_with("skypetoken_asm ") || self.token.starts_with("Bearer ") {
-            self.token.clone()
-        } else if self.token.len() > 100 && !self.token.contains(' ') {
-            // If it's a raw skypetoken or bearer token
-            format!("Bearer {}", self.token)
+    pub fn get_active_token(&self) -> String {
+        self.skype_token.clone().unwrap_or_else(|| self.access_token.clone())
+    }
+
+    /// Prepares request builder with required Teams authentication headers
+    fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref skype_tok) = self.skype_token {
+            req = req
+                .header("Authentication", format!("skypetoken_asm {}", skype_tok))
+                .header("x-skypetoken", skype_tok.as_str());
         } else {
-            self.token.clone()
+            req = req
+                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                .header("Authentication", format!("Bearer {}", self.access_token));
         }
+        req
     }
 
     /// Fetches all active conversations for current user
     pub async fn get_conversations(&self) -> Result<Vec<Conversation>> {
         let url = format!("{}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=50", self.base_url);
         
-        let resp = self.http_client
-            .get(&url)
-            .header(AUTHORIZATION, self.auth_header())
-            .header("Authentication", self.auth_header())
+        let req = self.http_client.get(&url);
+        let resp = self.apply_auth(req)
             .send()
             .await
             .context("Failed to send get_conversations request")?;
@@ -85,10 +125,8 @@ impl TeamsChatClient {
             page_size
         );
 
-        let resp = self.http_client
-            .get(&url)
-            .header(AUTHORIZATION, self.auth_header())
-            .header("Authentication", self.auth_header())
+        let req = self.http_client.get(&url);
+        let resp = self.apply_auth(req)
             .send()
             .await
             .context("Failed to send get_messages request")?;
@@ -111,7 +149,6 @@ impl TeamsChatClient {
             urlencoding::encode(conversation_id)
         );
 
-        // Escape HTML entities for safe inclusion into RichText/Html format
         let html_content = format!("<p>{}</p>", html_escape::encode_text(text));
         let client_message_id = chrono::Utc::now().timestamp_millis().to_string();
 
@@ -122,12 +159,12 @@ impl TeamsChatClient {
             client_message_id,
         };
 
-        let resp = self.http_client
+        let req = self.http_client
             .post(&url)
-            .header(AUTHORIZATION, self.auth_header())
-            .header("Authentication", self.auth_header())
             .header(CONTENT_TYPE, "application/json")
-            .json(&payload)
+            .json(&payload);
+
+        let resp = self.apply_auth(req)
             .send()
             .await
             .context("Failed to send message")?;
@@ -140,42 +177,5 @@ impl TeamsChatClient {
 
         let sent: ChatMessage = resp.json().await.context("Failed to parse send_message response")?;
         Ok(sent)
-    }
-
-    /// Register endpoint with chatsvc to obtain push notification / Trouter subscription URL
-    pub async fn register_endpoint(&self) -> Result<serde_json::Value> {
-        let url = format!("{}/v1/users/ME/endpoints", self.base_url);
-        let endpoint_id = format!("{{{}}}", uuid::Uuid::new_v4());
-        
-        let payload = serde_json::json!({
-            "id": endpoint_id,
-            "type": "EndpointRegistration",
-            "clientInfo": {
-                "clientPlatform": "skype.com",
-                "platformUIVersion": "teams-rust-lite/1.0"
-            },
-            "subscriptions": [
-                {
-                    "channelType": "HttpLongPoll",
-                    "interestedResources": [
-                        "/v1/users/ME/conversations/ALL/messages",
-                        "/v1/users/ME/conversations/ALL/properties"
-                    ]
-                }
-            ]
-        });
-
-        let resp = self.http_client
-            .post(&url)
-            .header(AUTHORIZATION, self.auth_header())
-            .header("Authentication", self.auth_header())
-            .header(CONTENT_TYPE, "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .context("Failed to register endpoint")?;
-
-        let res_json: serde_json::Value = resp.json().await?;
-        Ok(res_json)
     }
 }

@@ -37,6 +37,7 @@ struct TokenErrorResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GraphMeResponse {
     id: Option<String>,
     #[serde(rename = "displayName")]
@@ -124,19 +125,20 @@ impl OAuthManager {
                 let expires_at = now + token_resp.expires_in.unwrap_or(3600);
 
                 let mut token_data = TokenData {
-                    access_token: token_resp.access_token,
-                    refresh_token: token_resp.refresh_token,
+                    access_token: token_resp.access_token.clone(),
+                    refresh_token: token_resp.refresh_token.clone(),
                     expires_at,
                     user_id: None,
                     user_email: None,
                     display_name: None,
                 };
 
-                // Fetch profile info
-                if let Ok(profile) = self.fetch_user_profile(&token_data.access_token).await {
-                    token_data.user_id = profile.id;
-                    token_data.display_name = profile.display_name;
-                    token_data.user_email = profile.mail.or(profile.user_principal_name);
+                // Extract user claims directly from Access Token or ID Token JWT
+                let jwt_candidate = token_resp.id_token.as_deref().unwrap_or(&token_resp.access_token);
+                if let Some((name, email, uid)) = parse_jwt_claims(jwt_candidate) {
+                    token_data.display_name = name;
+                    token_data.user_email = email;
+                    token_data.user_id = uid;
                 }
 
                 return Ok(token_data);
@@ -222,4 +224,41 @@ impl OAuthManager {
             bail!("Failed to get user profile from Graph")
         }
     }
+}
+
+/// Decodes standard JWT payload without external signature validation
+pub fn parse_jwt_claims(token: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    use base64::Engine as _;
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let payload_b64 = parts[1];
+    // Add padding if missing
+    let padded = match payload_b64.len() % 4 {
+        2 => format!("{}==", payload_b64),
+        3 => format!("{}=", payload_b64),
+        _ => payload_b64.to_string(),
+    };
+
+    let bytes = base64::engine::general_purpose::URL_SAFE
+        .decode(&padded)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(&padded))
+        .ok()?;
+
+    let val = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    let name = val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let email = val.get("preferred_username")
+        .or_else(|| val.get("upn"))
+        .or_else(|| val.get("email"))
+        .or_else(|| val.get("unique_name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let uid = val.get("oid")
+        .or_else(|| val.get("sub"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some((name, email, uid))
 }

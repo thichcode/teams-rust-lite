@@ -173,7 +173,21 @@ impl CoreWorker {
         let access_tok = tokens.access_token.clone();
 
         self.token = Some(tokens);
-        let client = Arc::new(tokio::sync::Mutex::new(TeamsChatClient::new(access_tok.clone(), None)));
+        let mut chat_client = TeamsChatClient::new(access_tok.clone(), None);
+
+        // Exchange for SkypeToken via authsvc
+        let push_token = match chat_client.exchange_skype_token().await {
+            Ok(skype_tok) => {
+                log::info!("Successfully acquired Teams SkypeToken from authsvc!");
+                skype_tok
+            }
+            Err(e) => {
+                log::warn!("authsvc token exchange failed: {}. Falling back to access_token...", e);
+                access_tok.clone()
+            }
+        };
+
+        let client = Arc::new(tokio::sync::Mutex::new(chat_client));
         self.chat_client = Some(client.clone());
 
         let _ = self.tx_event.send(CoreEvent::AuthSuccess {
@@ -189,9 +203,9 @@ impl CoreWorker {
         // Fetch conversations
         self.refresh_conversations().await;
 
-        // Spawn Trouter real-time push service
+        // Spawn Trouter real-time push service using push_token (SkypeToken)
         let (tx_trouter, mut rx_trouter) = mpsc::channel(100);
-        let trouter = TrouterClient::new(access_tok, None, tx_trouter);
+        let trouter = TrouterClient::new(push_token, None, tx_trouter);
         tokio::spawn(async move {
             trouter.run_loop().await;
         });
