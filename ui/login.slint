@@ -44,14 +44,13 @@ export component LoginView inherits Rectangle {
                 }
 
                 // Theme Mode Switcher
-                TouchArea {
+                touch-theme := TouchArea {
                     width: 32px;
                     height: 32px;
                     clicked => { root.toggle-theme(); }
                     Rectangle {
                         border-radius: 6px;
                         background: touch-theme.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : transparent;
-                        touch-theme := TouchArea {}
                         Text {
                             text: root.theme-mode-icon;
                             font-size: 16px;
@@ -62,14 +61,13 @@ export component LoginView inherits Rectangle {
                 }
 
                 // Update Checker Button
-                TouchArea {
+                touch-update := TouchArea {
                     width: 32px;
                     height: 32px;
                     clicked => { root.check-update(); }
                     Rectangle {
                         border-radius: 6px;
                         background: touch-update.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : transparent;
-                        touch-update := TouchArea {}
                         Text {
                             text: "⇪";
                             color: root.is-update-available ? #ffd700 : (root.is-dark-theme ? #ffffff : #555555);

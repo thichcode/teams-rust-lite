@@ -364,7 +364,12 @@ pub fn attach_ui_bridge(
     });
 
     let tx_check_update = tx_cmd.clone();
+    let weak_win_check = weak_window.clone();
     window.on_check_for_updates(move || {
+        if let Some(win) = weak_win_check.upgrade() {
+            win.set_login_status("Checking for updates...".into());
+            win.set_connection_status("Checking for updates...".into());
+        }
         let tx = tx_check_update.clone();
         tokio::spawn(async move {
             let _ = tx.send(UiCommand::CheckForUpdates).await;
@@ -490,7 +495,10 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
         CoreEvent::UpdateResult(status) => match status {
             crate::updater::UpdateStatus::UpdateAvailable { latest_version, .. } => {
                 win.set_is_update_available(true);
-                win.set_update_info_text(format!("New version {} available!", latest_version).into());
+                let msg = format!("New version {} available! Click Download.", latest_version);
+                win.set_update_info_text(msg.clone().into());
+                win.set_login_status(msg.into());
+                win.set_connection_status(format!("Update available: {}", latest_version).into());
                 WindowsNotifier::notify_chat_message(
                     "Update Available",
                     "Teams Lite",
@@ -499,11 +507,25 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
             }
             crate::updater::UpdateStatus::UpToDate { current_version } => {
                 win.set_is_update_available(false);
-                win.set_connection_status(format!("Up to date (v{})", current_version).into());
+                let msg = format!("Teams Lite is up to date (v{})", current_version);
+                win.set_login_status(msg.clone().into());
+                win.set_connection_status(msg.into());
+                WindowsNotifier::notify_chat_message(
+                    "Teams Lite",
+                    "Update Check",
+                    &format!("You are on the latest version (v{}).", current_version),
+                );
             }
             crate::updater::UpdateStatus::CheckFailed(err) => {
                 log::warn!("Check for updates failed: {}", err);
-                win.set_connection_status(format!("Update check failed").into());
+                let msg = format!("Update check failed: {}", err);
+                win.set_login_status(msg.into());
+                win.set_connection_status("Update check failed".into());
+                WindowsNotifier::notify_chat_message(
+                    "Teams Lite",
+                    "Update Check",
+                    &format!("Could not check for updates: {}", err),
+                );
             }
         },
     }

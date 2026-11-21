@@ -34,7 +34,7 @@ impl UpdateChecker {
     /// Checks GitHub repository for newer releases
     pub async fn check() -> UpdateStatus {
         match Self::fetch_latest_release().await {
-            Ok(release) => {
+            Ok(Some(release)) => {
                 let latest = release.tag_name.trim_start_matches('v');
                 if is_newer_version(CURRENT_VERSION, latest) {
                     UpdateStatus::UpdateAvailable {
@@ -48,11 +48,14 @@ impl UpdateChecker {
                     }
                 }
             }
+            Ok(None) => UpdateStatus::UpToDate {
+                current_version: CURRENT_VERSION.to_string(),
+            },
             Err(e) => UpdateStatus::CheckFailed(e.to_string()),
         }
     }
 
-    async fn fetch_latest_release() -> Result<GitHubRelease> {
+    async fn fetch_latest_release() -> Result<Option<GitHubRelease>> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
@@ -64,39 +67,44 @@ impl UpdateChecker {
             .await
             .context("Failed to send request to GitHub Releases API")?;
 
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
         if !resp.status().is_success() {
             anyhow::bail!("GitHub API returned HTTP {}", resp.status());
         }
 
         let release: GitHubRelease = resp.json().await.context("Failed to parse GitHub release")?;
-        Ok(release)
+        Ok(Some(release))
     }
 }
 
 /// Compares two semver strings: returns true if latest is strictly newer than current
 pub fn is_newer_version(current: &str, latest: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split('.')
-            .filter_map(|part| part.split('-').next().unwrap_or("0").parse::<u64>().ok())
-            .collect()
+    let parse = |s: &str| -> (u64, u64, u64, u64) {
+        let s = s.trim().trim_start_matches('v');
+        let mut parts = s.split('-');
+        let version_part = parts.next().unwrap_or("");
+        let build_part = parts.next().unwrap_or("");
+
+        let mut nums = version_part.split('.').filter_map(|p| p.parse::<u64>().ok());
+        let major = nums.next().unwrap_or(0);
+        let minor = nums.next().unwrap_or(0);
+        let patch = nums.next().unwrap_or(0);
+
+        let build = if let Some(idx) = build_part.find("build.") {
+            build_part[idx + 6..].split(|c: char| !c.is_ascii_digit()).next().unwrap_or("0").parse::<u64>().unwrap_or(0)
+        } else {
+            build_part.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse::<u64>().unwrap_or(0)
+        };
+
+        (major, minor, patch, build)
     };
 
-    let cur_parts = parse(current);
-    let lat_parts = parse(latest);
-
-    let max_len = cur_parts.len().max(lat_parts.len());
-    for i in 0..max_len {
-        let c = cur_parts.get(i).copied().unwrap_or(0);
-        let l = lat_parts.get(i).copied().unwrap_or(0);
-        if l > c {
-            return true;
-        } else if l < c {
-            return false;
-        }
-    }
-
-    false
+    let cur = parse(current);
+    let lat = parse(latest);
+    lat > cur
 }
 
 #[cfg(test)]
@@ -108,7 +116,11 @@ mod tests {
         assert!(is_newer_version("0.1.0", "0.2.0"));
         assert!(is_newer_version("0.1.0", "v0.1.1"));
         assert!(is_newer_version("0.1.0", "1.0.0"));
+        assert!(is_newer_version("0.1.0", "v0.1.0-build.5"));
+        assert!(is_newer_version("0.1.0-build.4", "v0.1.0-build.5"));
         assert!(!is_newer_version("0.1.0", "0.1.0"));
+        assert!(!is_newer_version("0.1.0-build.5", "v0.1.0-build.5"));
         assert!(!is_newer_version("0.2.0", "0.1.9"));
+        assert!(!is_newer_version("0.1.0-build.5", "0.1.0"));
     }
 }

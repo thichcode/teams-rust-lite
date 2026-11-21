@@ -138,44 +138,56 @@ export component MainWindow inherits Window {
                         }
 
                         // Theme Mode Switcher
-                        TouchArea {
-                            width: 26px;
-                            height: 26px;
+                        touch-main-theme := TouchArea {
+                            width: 28px;
+                            height: 28px;
                             clicked => { root.toggle-theme-mode(); }
-                            Text {
-                                text: root.theme-mode-icon;
-                                font-size: 16px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            Rectangle {
+                                border-radius: 4px;
+                                background: touch-main-theme.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                Text {
+                                    text: root.theme-mode-icon;
+                                    font-size: 16px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
 
                         // Refresh button
-                        TouchArea {
-                            width: 24px;
-                            height: 24px;
+                        touch-main-refresh := TouchArea {
+                            width: 28px;
+                            height: 28px;
                             clicked => { root.trigger-refresh(); }
-                            Text {
-                                text: "↻";
-                                color: #ffffff;
-                                font-size: 18px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            Rectangle {
+                                border-radius: 4px;
+                                background: touch-main-refresh.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                Text {
+                                    text: "↻";
+                                    color: #ffffff;
+                                    font-size: 18px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
 
                         // Update Check button
-                        TouchArea {
-                            width: 24px;
-                            height: 24px;
+                        touch-main-update := TouchArea {
+                            width: 28px;
+                            height: 28px;
                             clicked => { root.check-for-updates(); }
-                            Text {
-                                text: "⇪";
-                                color: root.is-update-available ? #ffd700 : #ffffff;
-                                font-size: 18px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            Rectangle {
+                                border-radius: 4px;
+                                background: touch-main-update.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                Text {
+                                    text: "⇪";
+                                    color: root.is-update-available ? #ffd700 : #ffffff;
+                                    font-size: 18px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
