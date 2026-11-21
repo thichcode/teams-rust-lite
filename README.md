@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/icon.png" width="128" height="128" alt="Teams Rust Lite Logo" />
+
 # ⚡ MICROSOFT TEAMS LITE (RUST) ⚡
 
 ### *Khắc tinh của ngốn RAM — Bản Client Teams Native Siêu Nhẹ Dành Cho Windows*
