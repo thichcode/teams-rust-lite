@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{DateTime, Datelike, Local, Offset, Timelike};
 use std::f64::consts::PI;
 
 // Default coordinates: Vietnam (Hanoi: 21.0285° N, 105.8542° E)
@@ -56,7 +56,7 @@ impl SolarCalculator {
     }
 
     /// Computes sunrise and sunset times (in minutes from midnight UTC) using NOAA solar algorithm
-    pub fn calculate_solar_times(&self, now: DateTime<Local>) -> (f64, f64) {
+    pub fn calculate_solar_times<Tz: chrono::TimeZone>(&self, now: DateTime<Tz>) -> (f64, f64) {
         let day_of_year = now.ordinal() as f64;
         let hour = now.hour() as f64;
 
@@ -93,9 +93,9 @@ impl SolarCalculator {
     }
 
     /// Determines if current local time is daylight
-    pub fn is_daylight(&self, now: DateTime<Local>) -> bool {
-        let (sunrise_utc, sunset_utc) = self.calculate_solar_times(now);
-        let offset_minutes = (now.offset().local_minus_utc() / 60) as f64;
+    pub fn is_daylight<Tz: chrono::TimeZone>(&self, now: DateTime<Tz>) -> bool {
+        let (sunrise_utc, sunset_utc) = self.calculate_solar_times(now.clone());
+        let offset_minutes = (now.offset().fix().local_minus_utc() / 60) as f64;
 
         // Convert UTC minutes to local minutes of the day (0..1440)
         let sunrise_local = (sunrise_utc + offset_minutes).rem_euclid(1440.0);
@@ -108,9 +108,9 @@ impl SolarCalculator {
 
     /// Returns human-readable sunrise and sunset strings in local time, e.g. ("05:58", "17:34")
     #[allow(dead_code)]
-    pub fn get_solar_times_display(&self, now: DateTime<Local>) -> (String, String) {
-        let (sunrise_utc, sunset_utc) = self.calculate_solar_times(now);
-        let offset_minutes = (now.offset().local_minus_utc() / 60) as f64;
+    pub fn get_solar_times_display<Tz: chrono::TimeZone>(&self, now: DateTime<Tz>) -> (String, String) {
+        let (sunrise_utc, sunset_utc) = self.calculate_solar_times(now.clone());
+        let offset_minutes = (now.offset().fix().local_minus_utc() / 60) as f64;
 
         let to_time_str = |mins: f64| -> String {
             let local_mins = (mins + offset_minutes).rem_euclid(1440.0) as u32;
@@ -142,16 +142,18 @@ mod tests {
     #[test]
     fn test_solar_times_reasonable() {
         let calc = SolarCalculator::default();
-        let now = Local::now();
-        let (sunrise_utc, sunset_utc) = calc.calculate_solar_times(now);
+        let offset_vn = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+        let now_vn = chrono::Utc::now().with_timezone(&offset_vn);
+        let (sunrise_utc, sunset_utc) = calc.calculate_solar_times(now_vn);
 
-        // Sunset must be after sunrise
-        assert!(sunset_utc > sunrise_utc);
+        // Daylight duration check in minutes
+        let daylight_duration = (sunset_utc - sunrise_utc).rem_euclid(1440.0);
+        assert!(daylight_duration >= 600.0 && daylight_duration <= 850.0);
 
-        let (sunrise_str, sunset_str) = calc.get_solar_times_display(now);
-        println!("Calculated solar times: Sunrise {} - Sunset {}", sunrise_str, sunset_str);
+        let (sunrise_str, sunset_str) = calc.get_solar_times_display(now_vn);
+        println!("Calculated Hanoi solar times: Sunrise {} - Sunset {}", sunrise_str, sunset_str);
         
-        // In Hanoi, sunrise is always between 05:00 and 07:00 local time
+        // In Hanoi (UTC+7), sunrise is always between 05:00 and 07:00 local time
         assert!(sunrise_str.starts_with("05:") || sunrise_str.starts_with("06:"));
         // Sunset is always between 17:00 and 19:00 local time
         assert!(sunset_str.starts_with("17:") || sunset_str.starts_with("18:"));
