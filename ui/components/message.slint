@@ -1,0 +1,51 @@
+export component MessageBubble inherits Rectangle {
+    in property <string> sender-name: "User";
+    in property <string> content: "Hello world!";
+    in property <string> timestamp: "12:00 PM";
+    in property <bool> is-self: false;
+
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        alignment: is-self ? end : start;
+
+        Rectangle {
+            max-width: 480px;
+            border-radius: 12px;
+            background: is-self ? #5b5fc7 : #f0f0f4;
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 4px;
+
+                if !is-self: Text {
+                    text: root.sender-name;
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: #5b5fc7;
+                }
+
+                Text {
+                    text: root.content;
+                    font-size: 13px;
+                    color: is-self ? #ffffff : #1f1f1f;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.timestamp;
+                    font-size: 10px;
+                    color: is-self ? #e0e2ff : #8a8a8a;
+                    horizontal-alignment: is-self ? right : left;
+                }
+            }
+        }
+    }
+}

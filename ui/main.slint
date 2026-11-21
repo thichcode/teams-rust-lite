@@ -1,0 +1,279 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { ChatItem } from "components/chat_item.slint";
+import { MessageBubble } from "components/message.slint";
+import { LoginView } from "login.slint";
+
+export struct ConversationData {
+    id: string,
+    title: string,
+    last_message: string,
+    timestamp: string,
+    unread_count: int,
+    avatar_text: string,
+}
+
+export struct MessageData {
+    id: string,
+    sender_name: string,
+    content: string,
+    timestamp: string,
+    is_self: bool,
+}
+
+export component MainWindow inherits Window {
+    title: "Microsoft Teams Lite";
+    preferred-width: 980px;
+    preferred-height: 680px;
+    min-width: 720px;
+    min-height: 500px;
+    background: #ffffff;
+
+    in property <bool> is-logged-in: false;
+    in property <string> login-status: "Ready to sign in";
+    in property <bool> is-authenticating: false;
+    in property <string> login-user-code: "";
+
+    in property <string> user-name: "Teams User";
+    in property <string> connection-status: "Connecting...";
+    in property <bool> is-connected: true;
+
+    in property <[ConversationData]> conversations: [];
+    in property <string> active-conversation-id: "";
+    in property <string> active-conversation-title: "Select a conversation";
+
+    in property <[MessageData]> messages: [];
+    in-out property <string> draft-text: "";
+
+    callback start-login();
+    callback open-browser-login();
+    callback logout();
+    callback select-conversation(string);
+    callback send-message(string);
+    callback trigger-refresh();
+
+    if !is-logged-in: LoginView {
+        status-text: root.login-status;
+        is-loading: root.is-authenticating;
+        user-code: root.login-user-code;
+        start-login => { root.start-login(); }
+        open-browser-login => { root.open-browser-login(); }
+    }
+
+    if is-logged-in: HorizontalLayout {
+        // Left Sidebar: Conversations
+        Rectangle {
+            width: 320px;
+            background: #f7f7f9;
+            border-width: 1px;
+            border-color: #e5e5ea;
+
+            VerticalLayout {
+                // Header / Profile Bar
+                Rectangle {
+                    height: 56px;
+                    background: #5b5fc7;
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 12px;
+                        alignment: center;
+
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 16px;
+                            background: #ffffff;
+
+                            Text {
+                                text: "T";
+                                color: #5b5fc7;
+                                font-weight: 800;
+                                font-size: 16px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: root.user-name;
+                                color: #ffffff;
+                                font-size: 13px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: root.connection-status;
+                                color: root.is-connected ? #c8ffc8 : #ffd0d0;
+                                font-size: 10px;
+                            }
+                        }
+
+                        TouchArea {
+                            width: 24px;
+                            height: 24px;
+                            clicked => { root.trigger-refresh(); }
+                            Text {
+                                text: "↻";
+                                color: #ffffff;
+                                font-size: 18px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Search or Filter bar
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+
+                    search-input := LineEdit {
+                        placeholder-text: "Search chats...";
+                    }
+                }
+
+                // Chat list
+                ScrollView {
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        alignment: start;
+
+                        for conv in root.conversations: ChatItem {
+                            title: conv.title;
+                            last-message: conv.last-message;
+                            timestamp: conv.timestamp;
+                            unread-count: conv.unread-count;
+                            avatar-text: conv.avatar-text;
+                            is-selected: conv.id == root.active-conversation-id;
+                            clicked => {
+                                root.select-conversation(conv.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Right Pane: Active Conversation & Messages
+        Rectangle {
+            background: #ffffff;
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                // Chat header
+                Rectangle {
+                    height: 56px;
+                    border-width: 1px;
+                    border-color: #ededf2;
+                    background: #fafafc;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        alignment: center;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: root.active-conversation-title;
+                                font-size: 15px;
+                                font-weight: 700;
+                                color: #242424;
+                            }
+
+                            if root.active-conversation-id != "": Text {
+                                text: "Microsoft Teams Chat (Real-time Push)";
+                                font-size: 11px;
+                                color: #707070;
+                            }
+                        }
+                    }
+                }
+
+                // Messages View
+                if root.active-conversation-id == "": Rectangle {
+                    vertical-stretch: 1;
+                    Text {
+                        text: "Select a conversation to start chatting";
+                        color: #8c8c8c;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.active-conversation-id != "": ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        for msg in root.messages: MessageBubble {
+                            sender-name: msg.sender-name;
+                            content: msg.content;
+                            timestamp: msg.timestamp;
+                            is-self: msg.is-self;
+                        }
+                    }
+                }
+
+                // Message composer
+                if root.active-conversation-id != "": Rectangle {
+                    height: 64px;
+                    border-width: 1px;
+                    border-color: #e5e5ea;
+                    background: #ffffff;
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        padding-top: 10px;
+                        padding-bottom: 10px;
+                        spacing: 12px;
+                        alignment: center;
+
+                        input-msg := LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "Type a message... (Press Enter or click Send)";
+                            text <=> root.draft-text;
+                            accepted => {
+                                if (root.draft-text != "") {
+                                    root.send-message(root.draft-text);
+                                    root.draft-text = "";
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "Send";
+                            primary: true;
+                            enabled: root.draft-text != "";
+                            clicked => {
+                                if (root.draft-text != "") {
+                                    root.send-message(root.draft-text);
+                                    root.draft-text = "";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

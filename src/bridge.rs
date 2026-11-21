@@ -1,0 +1,444 @@
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+use crate::auth::{OAuthManager, TokenData, TokenStore};
+use crate::teams::chatsvc::TeamsChatClient;
+use crate::teams::models::{ChatMessage, Conversation};
+use crate::teams::trouter::{TrouterClient, TrouterNotification};
+use crate::windows_os::WindowsNotifier;
+use crate::{ConversationData, MainWindow, MessageData};
+
+#[derive(Debug, Clone)]
+pub enum UiCommand {
+    StartLogin,
+    OpenBrowserLogin,
+    Logout,
+    RefreshConversations,
+    SelectConversation(String),
+    SendMessage { conversation_id: String, text: String },
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum CoreEvent {
+    DeviceCodeReceived { user_code: String, verification_url: String },
+    AuthSuccess { user_name: String, email: String },
+    AuthFailed(String),
+    ConversationsLoaded(Vec<Conversation>),
+    MessagesLoaded { conversation_id: String, messages: Vec<ChatMessage> },
+    NewMessageReceived(ChatMessage),
+    ConnectionStatusChanged { status: String, is_connected: bool },
+    ErrorOccurred(String),
+}
+
+pub struct CoreWorker {
+    rx_cmd: mpsc::Receiver<UiCommand>,
+    tx_event: mpsc::Sender<CoreEvent>,
+    token: Option<TokenData>,
+    chat_client: Option<Arc<tokio::sync::Mutex<TeamsChatClient>>>,
+    current_conversation_id: Option<String>,
+}
+
+impl CoreWorker {
+    pub fn new(rx_cmd: mpsc::Receiver<UiCommand>, tx_event: mpsc::Sender<CoreEvent>) -> Self {
+        Self {
+            rx_cmd,
+            tx_event,
+            token: None,
+            chat_client: None,
+            current_conversation_id: None,
+        }
+    }
+
+    pub async fn run(mut self) {
+        log::info!("CoreWorker started in Tokio runtime.");
+
+        // Check if existing token exists in Windows Credential Manager
+        if let Ok(Some(saved_token)) = TokenStore::load() {
+            log::info!("Found stored credentials in Windows Keyring");
+            if !saved_token.is_expired() {
+                self.setup_session(saved_token).await;
+            } else if let Some(ref refresh_tok) = saved_token.refresh_token {
+                log::info!("Stored token expired, attempting refresh...");
+                let oauth = OAuthManager::default();
+                if let Ok(new_token) = oauth.refresh_token(refresh_tok).await {
+                    let _ = TokenStore::save(&new_token);
+                    self.setup_session(new_token).await;
+                } else {
+                    let _ = self.tx_event.send(CoreEvent::AuthFailed("Saved session expired. Please sign in again.".into())).await;
+                }
+            }
+        }
+
+        while let Some(cmd) = self.rx_cmd.recv().await {
+            match cmd {
+                UiCommand::StartLogin => {
+                    self.handle_login().await;
+                }
+                UiCommand::OpenBrowserLogin => {
+                    let _ = open::that("https://login.microsoft.com/device");
+                }
+                UiCommand::Logout => {
+                    let _ = TokenStore::clear();
+                    self.token = None;
+                    self.chat_client = None;
+                    let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+                        status: "Logged out".into(),
+                        is_connected: false,
+                    }).await;
+                }
+                UiCommand::RefreshConversations => {
+                    self.refresh_conversations().await;
+                }
+                UiCommand::SelectConversation(conv_id) => {
+                    self.current_conversation_id = Some(conv_id.clone());
+                    self.load_messages_for_conversation(&conv_id).await;
+                }
+                UiCommand::SendMessage { conversation_id, text } => {
+                    self.send_message(&conversation_id, &text).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_login(&mut self) {
+        let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+            status: "Requesting sign-in code from Microsoft...".into(),
+            is_connected: false,
+        }).await;
+
+        let oauth = OAuthManager::default();
+        let device_code_resp = match oauth.request_device_code().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                log::error!("Failed to request device code: {}", e);
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in initialization failed: {}", e))).await;
+                return;
+            }
+        };
+
+        // Send code to UI
+        let _ = self.tx_event.send(CoreEvent::DeviceCodeReceived {
+            user_code: device_code_resp.user_code.clone(),
+            verification_url: device_code_resp.verification_uri.clone(),
+        }).await;
+
+        // Try to copy code to Windows clipboard
+        let user_code = device_code_resp.user_code.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &format!("Set-Clipboard -Value '{}'", user_code)])
+                .output();
+        });
+
+        // Open browser
+        log::info!("Opening browser at: {}", device_code_resp.verification_uri);
+        let _ = open::that(&device_code_resp.verification_uri);
+
+        // Poll for authorization
+        let poll_interval = device_code_resp.interval.unwrap_or(5);
+        match oauth.poll_device_code(&device_code_resp.device_code, poll_interval, device_code_resp.expires_in).await {
+            Ok(tokens) => {
+                let _ = TokenStore::save(&tokens);
+                self.setup_session(tokens).await;
+            }
+            Err(e) => {
+                log::error!("Sign-in polling error: {}", e);
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in failed: {}", e))).await;
+            }
+        }
+    }
+
+    async fn setup_session(&mut self, tokens: TokenData) {
+        let user_name = tokens.display_name.clone().unwrap_or_else(|| "Teams User".into());
+        let email = tokens.user_email.clone().unwrap_or_default();
+        let access_tok = tokens.access_token.clone();
+
+        self.token = Some(tokens);
+        let client = Arc::new(tokio::sync::Mutex::new(TeamsChatClient::new(access_tok.clone(), None)));
+        self.chat_client = Some(client.clone());
+
+        let _ = self.tx_event.send(CoreEvent::AuthSuccess {
+            user_name,
+            email,
+        }).await;
+
+        let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+            status: "Connected (chatsvc)".into(),
+            is_connected: true,
+        }).await;
+
+        // Fetch conversations
+        self.refresh_conversations().await;
+
+        // Spawn Trouter real-time push service
+        let (tx_trouter, mut rx_trouter) = mpsc::channel(100);
+        let trouter = TrouterClient::new(access_tok, None, tx_trouter);
+        tokio::spawn(async move {
+            trouter.run_loop().await;
+        });
+
+        // Forward trouter events
+        let tx_core = self.tx_event.clone();
+        tokio::spawn(async move {
+            while let Some(notif) = rx_trouter.recv().await {
+                match notif {
+                    TrouterNotification::Connected => {
+                        let _ = tx_core.send(CoreEvent::ConnectionStatusChanged {
+                            status: "Live (Trouter Push Active)".into(),
+                            is_connected: true,
+                        }).await;
+                    }
+                    TrouterNotification::Disconnected => {
+                        let _ = tx_core.send(CoreEvent::ConnectionStatusChanged {
+                            status: "Reconnecting push gateway...".into(),
+                            is_connected: false,
+                        }).await;
+                    }
+                    TrouterNotification::NewMessage(msg) => {
+                        let clean = msg.clean_text();
+                        let sender = msg.im_display_name.as_deref().unwrap_or("Someone");
+                        WindowsNotifier::notify_chat_message(sender, "", &clean);
+                        let _ = tx_core.send(CoreEvent::NewMessageReceived(msg)).await;
+                    }
+                    TrouterNotification::RawEvent(_) => {}
+                }
+            }
+        });
+    }
+
+    async fn refresh_conversations(&self) {
+        if let Some(ref client_lock) = self.chat_client {
+            let client = client_lock.lock().await;
+            match client.get_conversations().await {
+                Ok(conversations) => {
+                    let _ = self.tx_event.send(CoreEvent::ConversationsLoaded(conversations)).await;
+                }
+                Err(e) => {
+                    log::warn!("Failed to fetch conversations: {}", e);
+                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("Failed to load chats: {}", e))).await;
+                }
+            }
+        }
+    }
+
+    async fn load_messages_for_conversation(&self, conv_id: &str) {
+        if let Some(ref client_lock) = self.chat_client {
+            let client = client_lock.lock().await;
+            match client.get_messages(conv_id, 40).await {
+                Ok(messages) => {
+                    let _ = self.tx_event.send(CoreEvent::MessagesLoaded {
+                        conversation_id: conv_id.to_string(),
+                        messages,
+                    }).await;
+                }
+                Err(e) => {
+                    log::warn!("Failed to fetch messages for {}: {}", conv_id, e);
+                }
+            }
+        }
+    }
+
+    async fn send_message(&self, conv_id: &str, text: &str) {
+        if let Some(ref client_lock) = self.chat_client {
+            let client = client_lock.lock().await;
+            match client.send_message(conv_id, text).await {
+                Ok(sent_msg) => {
+                    let _ = self.tx_event.send(CoreEvent::NewMessageReceived(sent_msg)).await;
+                }
+                Err(e) => {
+                    log::error!("Failed to send message: {}", e);
+                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("Failed to send: {}", e))).await;
+                }
+            }
+        }
+    }
+}
+
+pub fn attach_ui_bridge(
+    window: &MainWindow,
+    tx_cmd: mpsc::Sender<UiCommand>,
+    mut rx_event: mpsc::Receiver<CoreEvent>,
+) {
+    let weak_window = window.as_weak();
+
+    // Hook up UI callbacks to UiCommand channel
+    let tx_login = tx_cmd.clone();
+    let weak_login = weak_window.clone();
+    window.on_start_login(move || {
+        if let Some(win) = weak_login.upgrade() {
+            win.set_is_authenticating(true);
+            win.set_login_status("Opening browser for Microsoft Sign-in...".into());
+        }
+        let tx = tx_login.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::StartLogin).await;
+        });
+    });
+
+    let tx_open_browser = tx_cmd.clone();
+    window.on_open_browser_login(move || {
+        let tx = tx_open_browser.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::OpenBrowserLogin).await;
+        });
+    });
+
+    let tx_logout = tx_cmd.clone();
+    window.on_logout(move || {
+        let tx = tx_logout.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::Logout).await;
+        });
+    });
+
+    let tx_refresh = tx_cmd.clone();
+    window.on_trigger_refresh(move || {
+        let tx = tx_refresh.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::RefreshConversations).await;
+        });
+    });
+
+    let tx_select = tx_cmd.clone();
+    let weak_select = weak_window.clone();
+    window.on_select_conversation(move |conv_id| {
+        if let Some(win) = weak_select.upgrade() {
+            win.set_active_conversation_id(conv_id.clone());
+        }
+        let tx = tx_select.clone();
+        let id_str = conv_id.to_string();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::SelectConversation(id_str)).await;
+        });
+    });
+
+    let tx_send = tx_cmd.clone();
+    let weak_send = weak_window.clone();
+    window.on_send_message(move |text| {
+        if let Some(win) = weak_send.upgrade() {
+            let conv_id = win.get_active_conversation_id().to_string();
+            let text_str = text.to_string();
+            if !conv_id.is_empty() && !text_str.is_empty() {
+                let tx = tx_send.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(UiCommand::SendMessage {
+                        conversation_id: conv_id,
+                        text: text_str,
+                    }).await;
+                });
+            }
+        }
+    });
+
+    // Listen to CoreEvents and update Slint UI via invoke_from_event_loop
+    let weak_events = weak_window.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = rx_event.recv().await {
+            let weak_target = weak_events.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = weak_target.upgrade() {
+                    handle_core_event(&win, evt);
+                }
+            });
+        }
+    });
+}
+
+fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
+    match evt {
+        CoreEvent::DeviceCodeReceived { user_code, .. } => {
+            win.set_login_user_code(user_code.into());
+            win.set_login_status("Code copied to clipboard! Paste it into the browser window to sign in.".into());
+            win.set_is_authenticating(true);
+        }
+        CoreEvent::AuthSuccess { user_name, .. } => {
+            win.set_login_user_code("".into());
+            win.set_is_logged_in(true);
+            win.set_is_authenticating(false);
+            win.set_user_name(user_name.into());
+            win.set_login_status("Signed in successfully".into());
+        }
+        CoreEvent::AuthFailed(err) => {
+            win.set_is_authenticating(false);
+            win.set_is_logged_in(false);
+            win.set_login_status(err.into());
+        }
+        CoreEvent::ConnectionStatusChanged { status, is_connected } => {
+            win.set_connection_status(status.into());
+            win.set_is_connected(is_connected);
+        }
+        CoreEvent::ConversationsLoaded(convs) => {
+            let user_id = win.get_user_name().to_string();
+            let slint_convs: Vec<ConversationData> = convs
+                .into_iter()
+                .map(|c| {
+                    let title = c.display_title(&user_id);
+                    let initials = c.initials(&user_id);
+                    let last_msg = c.last_message.as_ref().map(|m| m.clean_text()).unwrap_or_default();
+                    let time = c.last_message.as_ref().map(|m| m.formatted_time()).unwrap_or_default();
+
+                    ConversationData {
+                        id: c.id.into(),
+                        title: title.into(),
+                        last_message: last_msg.into(),
+                        timestamp: time.into(),
+                        unread_count: 0,
+                        avatar_text: initials.into(),
+                    }
+                })
+                .collect();
+
+            let model = ModelRc::new(VecModel::from(slint_convs));
+            win.set_conversations(model);
+        }
+        CoreEvent::MessagesLoaded { messages, .. } => {
+            let user_name = win.get_user_name().to_string();
+            let slint_msgs: Vec<MessageData> = messages
+                .into_iter()
+                .map(|m| {
+                    let sender = m.im_display_name.clone().unwrap_or_else(|| "User".into());
+                    let is_self = sender == user_name || m.from.as_deref().unwrap_or("").contains(&user_name);
+                    let content = m.clean_text();
+                    let time = m.formatted_time();
+
+                    MessageData {
+                        id: m.id.into(),
+                        sender_name: sender.into(),
+                        content: content.into(),
+                        timestamp: time.into(),
+                        is_self,
+                    }
+                })
+                .collect();
+
+            let model = ModelRc::new(VecModel::from(slint_msgs));
+            win.set_messages(model);
+        }
+        CoreEvent::NewMessageReceived(m) => {
+            let user_name = win.get_user_name().to_string();
+            let sender = m.im_display_name.clone().unwrap_or_else(|| "User".into());
+            let is_self = sender == user_name || m.from.as_deref().unwrap_or("").contains(&user_name);
+            let content = m.clean_text();
+            let time = m.formatted_time();
+
+            let new_msg = MessageData {
+                id: m.id.into(),
+                sender_name: sender.into(),
+                content: content.into(),
+                timestamp: time.into(),
+                is_self,
+            };
+
+            // Append to current messages model
+            let current_model = win.get_messages();
+            let mut list: Vec<MessageData> = current_model.iter().collect();
+            list.push(new_msg);
+            win.set_messages(ModelRc::new(VecModel::from(list)));
+        }
+        CoreEvent::ErrorOccurred(err) => {
+            win.set_connection_status(format!("Error: {}", err).into());
+        }
+    }
+}

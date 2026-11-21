@@ -1,0 +1,139 @@
+import { Button } from "std-widgets.slint";
+
+export component LoginView inherits Rectangle {
+    in property <string> status-text: "Sign in with your Microsoft account to get started.";
+    in property <bool> is-loading: false;
+    in property <string> user-code: "";
+    in property <string> verification-url: "https://microsoft.com/devicelogin";
+    
+    callback start-login();
+    callback open-browser-login();
+
+    background: #f5f5f7;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 24px;
+        padding: 32px;
+
+        // Logo & Title
+        VerticalLayout {
+            alignment: center;
+            spacing: 8px;
+
+            Rectangle {
+                width: 64px;
+                height: 64px;
+                border-radius: 16px;
+                background: #5b5fc7;
+
+                Text {
+                    text: "T";
+                    font-size: 36px;
+                    font-weight: 800;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: "Microsoft Teams Lite";
+                font-size: 24px;
+                font-weight: 700;
+                color: #242424;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Native Windows Client (Slint + Rust)";
+                font-size: 13px;
+                color: #616161;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Info / Login card
+        Rectangle {
+            max-width: 440px;
+            border-radius: 12px;
+            background: #ffffff;
+            border-width: 1px;
+            border-color: #e5e5e5;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+
+                if root.user-code == "": VerticalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: root.status-text;
+                        font-size: 13px;
+                        color: #424242;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    Button {
+                        text: root.is-loading ? "Requesting sign-in..." : "Sign in with Microsoft";
+                        enabled: !root.is-loading;
+                        primary: true;
+                        clicked => { root.start-login(); }
+                    }
+                }
+
+                if root.user-code != "": VerticalLayout {
+                    spacing: 14px;
+                    alignment: center;
+
+                    Text {
+                        text: "Enter this code in the Microsoft sign-in page:";
+                        font-size: 13px;
+                        color: #555555;
+                        horizontal-alignment: center;
+                    }
+
+                    // Prominent Code Box
+                    Rectangle {
+                        height: 52px;
+                        border-radius: 8px;
+                        background: #f0f1ff;
+                        border-width: 2px;
+                        border-color: #5b5fc7;
+
+                        Text {
+                            text: root.user-code;
+                            font-size: 24px;
+                            font-weight: 800;
+                            color: #5b5fc7;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: root.status-text;
+                        font-size: 12px;
+                        color: #666666;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    Button {
+                        text: "Open Browser Again";
+                        clicked => { root.open-browser-login(); }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Fast, resource-efficient (<60MB RAM), native toast notifications";
+            font-size: 11px;
+            color: #8a8a8a;
+            horizontal-alignment: center;
+        }
+    }
+}

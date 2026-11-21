@@ -1,0 +1,96 @@
+import { Button } from "std-widgets.slint";
+
+export component ChatItem inherits Rectangle {
+    in property <string> title: "Conversation";
+    in property <string> last-message: "No messages yet";
+    in property <string> timestamp: "12:00";
+    in property <int> unread-count: 0;
+    in property <bool> is-selected: false;
+    in property <string> avatar-text: "TC";
+    
+    callback clicked();
+
+    height: 64px;
+    border-radius: 8px;
+    background: is-selected ? #e8ebfa : (touch.has-hover ? #f3f4f8 : transparent);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 12px;
+        alignment: center;
+
+        // Avatar circle
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: 20px;
+            background: #5b5fc7; // Teams purple/indigo
+
+            Text {
+                text: root.avatar-text;
+                color: #ffffff;
+                font-size: 14px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Details column
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            HorizontalLayout {
+                Text {
+                    text: root.title;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: #242424;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: root.timestamp;
+                    font-size: 11px;
+                    color: #707070;
+                    horizontal-alignment: right;
+                }
+            }
+
+            HorizontalLayout {
+                Text {
+                    text: root.last-message;
+                    font-size: 12px;
+                    color: #616161;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                if root.unread-count > 0: Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #c4314b; // Teams notification red
+
+                    Text {
+                        text: "\{root.unread-count}";
+                        color: #ffffff;
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
