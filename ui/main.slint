@@ -64,6 +64,7 @@ export component MainWindow inherits Window {
     callback open-update-url();
     callback install-update();
     callback toggle-theme-mode();
+    callback open-logs();
 
     if !is-logged-in: LoginView {
         status-text: root.login-status;
@@ -80,6 +81,7 @@ export component MainWindow inherits Window {
         check-update => { root.check-for-updates(); }
         open-update => { root.open-update-url(); }
         install-update => { root.install-update(); }
+        open-logs => { root.open-logs(); }
     }
 
     if is-logged-in: HorizontalLayout {
@@ -202,6 +204,23 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+
+                        // Open Logs button
+                        touch-main-log := TouchArea {
+                            width: 28px;
+                            height: 28px;
+                            clicked => { root.open-logs(); }
+                            Rectangle {
+                                border-radius: 4px;
+                                background: touch-main-log.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                Text {
+                                    text: "📄";
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -252,9 +271,14 @@ export component MainWindow inherits Window {
 
                             HorizontalLayout {
                                 alignment: center;
+                                spacing: 8px;
                                 Button {
                                     text: "Thử lại (Retry)";
                                     clicked => { root.trigger-refresh(); }
+                                }
+                                Button {
+                                    text: "📄 Xem Log";
+                                    clicked => { root.open-logs(); }
                                 }
                             }
                         }

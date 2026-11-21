@@ -18,6 +18,7 @@ export component LoginView inherits Rectangle {
     callback check-update();
     callback open-update();
     callback install-update();
+    callback open-logs();
 
     background: root.is-dark-theme ? #1f1f1f : #f5f5f7;
 
@@ -90,6 +91,39 @@ export component LoginView inherits Rectangle {
                                 color: root.is-update-available ? (root.is-dark-theme ? #ffd700 : #b8860b) : (root.is-dark-theme ? #cccccc : #444444);
                                 font-size: 12px;
                                 font-weight: root.is-update-available ? 700 : 500;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Log Viewer Button
+                touch-logs := TouchArea {
+                    height: 32px;
+                    clicked => { root.open-logs(); }
+                    Rectangle {
+                        border-radius: 6px;
+                        background: touch-logs.has-hover ? (root.is-dark-theme ? #333338 : #e8e8ed) : (root.is-dark-theme ? #28282c : #ebebee);
+                        border-width: 1px;
+                        border-color: root.is-dark-theme ? #3e3e42 : #d0d0d5;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            alignment: center;
+
+                            Text {
+                                text: "📄";
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "Xem Log";
+                                color: root.is-dark-theme ? #cccccc : #444444;
+                                font-size: 12px;
+                                font-weight: 500;
                                 vertical-alignment: center;
                             }
                         }
@@ -194,12 +228,15 @@ export component LoginView inherits Rectangle {
                         if root.user-code == "": VerticalLayout {
                             spacing: 16px;
 
-                            Text {
-                                text: root.status-text;
-                                font-size: 13px;
-                                color: root.is-dark-theme ? #cccccc : #424242;
-                                horizontal-alignment: center;
-                                wrap: word-wrap;
+                            touch-status-login := TouchArea {
+                                clicked => { root.open-logs(); }
+                                Text {
+                                    text: root.status-text;
+                                    font-size: 13px;
+                                    color: touch-status-login.has-hover ? (root.is-dark-theme ? #60cdff : #0067b8) : (root.is-dark-theme ? #cccccc : #424242);
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
                             }
 
                             Button {

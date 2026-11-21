@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 mod auth;
 mod bridge;
+mod logger;
 mod solar;
 mod teams;
 mod updater;
@@ -17,8 +18,8 @@ slint::include_modules!();
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Setup logger
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Setup persistent file + stderr logger
+    let _ = logger::init();
     log::info!("Starting Microsoft Teams Lite (Native Slint Desktop Client)...");
 
     // Initialize UI Window

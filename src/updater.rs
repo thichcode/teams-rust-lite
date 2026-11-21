@@ -68,7 +68,10 @@ impl UpdateChecker {
             Ok(None) => UpdateStatus::UpToDate {
                 current_version: CURRENT_VERSION.to_string(),
             },
-            Err(e) => UpdateStatus::CheckFailed(e.to_string()),
+            Err(e) => {
+                log::error!("Update check failed: {:#}", e);
+                UpdateStatus::CheckFailed(format!("{:#}", e))
+            }
         }
     }
 
@@ -132,8 +135,9 @@ impl UpdateChecker {
     }
 
     async fn fetch_latest_release() -> Result<Option<GitHubRelease>> {
+        log::info!("Checking for updates at {}", GITHUB_API_URL);
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(12))
             .build()?;
 
         let resp = client
@@ -143,15 +147,21 @@ impl UpdateChecker {
             .await
             .context("Failed to send request to GitHub Releases API")?;
 
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let status = resp.status();
+        log::info!("GitHub Releases API responded with status {}", status);
+
+        if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
 
-        if !resp.status().is_success() {
-            anyhow::bail!("GitHub API returned HTTP {}", resp.status());
+        if !status.is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            log::error!("GitHub API error response (HTTP {}): {}", status, err_body);
+            anyhow::bail!("GitHub API returned HTTP {}: {}", status, err_body);
         }
 
         let release: GitHubRelease = resp.json().await.context("Failed to parse GitHub release")?;
+        log::info!("Fetched latest release info: tag={}", release.tag_name);
         Ok(Some(release))
     }
 }

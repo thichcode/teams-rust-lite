@@ -20,6 +20,7 @@ pub enum UiCommand {
     CheckForUpdates,
     OpenUpdateUrl,
     InstallUpdate,
+    OpenLogs,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,12 @@ impl CoreWorker {
                         }
                     } else if let Some(ref release_url) = self.latest_update_url {
                         let _ = open::that(release_url);
+                    }
+                }
+                UiCommand::OpenLogs => {
+                    log::info!("Opening debug log file on request...");
+                    if let Err(e) = crate::logger::open_log_file() {
+                        log::error!("Failed to open log file: {:#}", e);
                     }
                 }
             }
@@ -411,6 +418,14 @@ pub fn attach_ui_bridge(
         let tx = tx_install_update.clone();
         tokio::spawn(async move {
             let _ = tx.send(UiCommand::InstallUpdate).await;
+        });
+    });
+
+    let tx_open_logs = tx_cmd.clone();
+    window.on_open_logs(move || {
+        let tx = tx_open_logs.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::OpenLogs).await;
         });
     });
 

@@ -48,6 +48,7 @@ impl TeamsChatClient {
 
     /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
     pub async fn exchange_skype_token(&mut self) -> Result<String> {
+        log::info!("Calling authsvc token exchange at {}", DEFAULT_AUTHSVC_URL);
         let resp = self.http_client
             .post(DEFAULT_AUTHSVC_URL)
             .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
@@ -60,6 +61,7 @@ impl TeamsChatClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
+            log::error!("authsvc token exchange failed (HTTP {}): {}", status, err_body);
             bail!("authsvc token exchange failed (HTTP {}): {}", status, err_body);
         }
 
@@ -116,6 +118,7 @@ impl TeamsChatClient {
     /// Fetches all active conversations for current user
     pub async fn get_conversations(&self) -> Result<Vec<Conversation>> {
         let url = format!("{}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=50", self.base_url);
+        log::info!("Fetching conversations from: {}", url);
         
         let req = self.http_client.get(&url);
         let resp = self.apply_auth(req)
@@ -123,14 +126,17 @@ impl TeamsChatClient {
             .await
             .context("Failed to send get_conversations request")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        log::info!("chatsvc get_conversations response HTTP {}", status);
+
+        if !status.is_success() {
             let err_body = resp.text().await.unwrap_or_default();
             log::error!("chatsvc get_conversations error (HTTP {}): {}", status, err_body);
             bail!("chatsvc HTTP {}: {}", status, err_body);
         }
 
         let body: ConversationListResponse = resp.json().await.context("Failed to parse conversations JSON")?;
+        log::info!("Successfully parsed {} conversations", body.conversations.len());
         Ok(body.conversations)
     }
 
