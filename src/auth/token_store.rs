@@ -6,6 +6,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SERVICE_NAME: &str = "teams-rust-lite";
 const ACCOUNT_NAME: &str = "oauth_tokens";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccountType {
+    WorkOrSchool,
+    Personal,
+}
+
+impl Default for AccountType {
+    fn default() -> Self {
+        AccountType::WorkOrSchool
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenData {
     pub access_token: String,
@@ -14,6 +26,8 @@ pub struct TokenData {
     pub user_id: Option<String>,
     pub user_email: Option<String>,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub account_type: AccountType,
 }
 
 impl TokenData {
@@ -87,6 +101,7 @@ mod tests {
             user_id: Some("uid".into()),
             user_email: Some("a@b.com".into()),
             display_name: Some("Test User".into()),
+            account_type: AccountType::WorkOrSchool,
         };
 
         let entry = match TokenStore::get_entry_for_account("oauth_tokens_test") {
@@ -124,6 +139,7 @@ mod tests {
             user_id: None,
             user_email: None,
             display_name: None,
+            account_type: AccountType::WorkOrSchool,
         };
         assert!(expired.is_expired());
 
@@ -134,6 +150,7 @@ mod tests {
             user_id: None,
             user_email: None,
             display_name: None,
+            account_type: AccountType::WorkOrSchool,
         };
         assert!(!valid.is_expired());
     }

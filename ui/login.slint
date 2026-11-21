@@ -12,7 +12,8 @@ export component LoginView inherits Rectangle {
     in property <bool> is-update-available: false;
     in property <string> update-info-text: "";
 
-    callback start-login();
+    callback start-login-work();
+    callback start-login-personal();
     callback open-browser-login();
     callback toggle-theme();
     callback check-update();
@@ -239,11 +240,29 @@ export component LoginView inherits Rectangle {
                                 }
                             }
 
-                            Button {
-                                text: root.is-loading ? "Requesting sign-in..." : "Sign in with Microsoft";
-                                enabled: !root.is-loading;
-                                primary: true;
-                                clicked => { root.start-login(); }
+                            VerticalLayout {
+                                spacing: 10px;
+
+                                Button {
+                                    text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "🏢 Đăng nhập Tài khoản Công ty / Doanh nghiệp";
+                                    enabled: !root.is-loading;
+                                    primary: true;
+                                    clicked => { root.start-login-work(); }
+                                }
+
+                                Button {
+                                    text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "👤 Đăng nhập Tài khoản Cá nhân / Teams Free";
+                                    enabled: !root.is-loading;
+                                    clicked => { root.start-login-personal(); }
+                                }
+
+                                Text {
+                                    text: "🏢 Công ty: Microsoft 365, M365  •  👤 Cá nhân: Gmail, Outlook, số điện thoại";
+                                    font-size: 11px;
+                                    color: root.is-dark-theme ? #888888 : #777777;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
 

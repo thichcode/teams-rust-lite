@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
-use super::token_store::TokenData;
+use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Web or Azure App
 pub const DEFAULT_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
@@ -74,15 +74,21 @@ impl OAuthManager {
     }
 
     /// Step 1: Request a device authorization code from Microsoft Identity Platform
-    pub async fn request_device_code(&self) -> Result<DeviceCodeResponse> {
-        let url = "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
+    pub async fn request_device_code(&self, account_type: AccountType) -> Result<DeviceCodeResponse> {
+        let tenant = match account_type {
+            AccountType::WorkOrSchool => "organizations",
+            AccountType::Personal => "consumers",
+        };
+        let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode", tenant);
+        log::info!("Requesting device code from {} for {:?}", url, account_type);
+
         let params = [
             ("client_id", self.client_id.as_str()),
             ("scope", DEFAULT_SCOPES),
         ];
 
         let resp = self.http_client
-            .post(url)
+            .post(&url)
             .form(&params)
             .send()
             .await
@@ -98,8 +104,20 @@ impl OAuthManager {
     }
 
     /// Step 2: Poll token endpoint until user approves the sign-in in browser
-    pub async fn poll_device_code(&self, device_code: &str, poll_interval: u64, expires_in: u64) -> Result<TokenData> {
-        let token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+    pub async fn poll_device_code(
+        &self,
+        device_code: &str,
+        poll_interval: u64,
+        expires_in: u64,
+        account_type: AccountType,
+    ) -> Result<TokenData> {
+        let tenant = match account_type {
+            AccountType::WorkOrSchool => "organizations",
+            AccountType::Personal => "consumers",
+        };
+        let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
+        log::info!("Polling token endpoint at {} for {:?}", token_url, account_type);
+
         let interval_duration = Duration::from_secs(poll_interval.max(3));
         let deadline = SystemTime::now() + Duration::from_secs(expires_in);
 
@@ -113,7 +131,7 @@ impl OAuthManager {
             ];
 
             let resp = self.http_client
-                .post(token_url)
+                .post(&token_url)
                 .form(&params)
                 .send()
                 .await
@@ -131,6 +149,7 @@ impl OAuthManager {
                     user_id: None,
                     user_email: None,
                     display_name: None,
+                    account_type,
                 };
 
                 // Extract user claims directly from Access Token or ID Token JWT
@@ -175,8 +194,14 @@ impl OAuthManager {
     }
 
     /// Refreshes the access token using a refresh token
-    pub async fn refresh_token(&self, refresh_token: &str) -> Result<TokenData> {
-        let token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+    pub async fn refresh_token(&self, refresh_token: &str, account_type: AccountType) -> Result<TokenData> {
+        let tenant = match account_type {
+            AccountType::WorkOrSchool => "organizations",
+            AccountType::Personal => "consumers",
+        };
+        let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
+        log::info!("Refreshing token at {} for {:?}", token_url, account_type);
+
         let params = [
             ("client_id", self.client_id.as_str()),
             ("grant_type", "refresh_token"),
@@ -185,7 +210,7 @@ impl OAuthManager {
         ];
 
         let resp = self.http_client
-            .post(token_url)
+            .post(&token_url)
             .form(&params)
             .send()
             .await
@@ -207,6 +232,7 @@ impl OAuthManager {
             user_id: None,
             user_email: None,
             display_name: None,
+            account_type,
         })
     }
 

@@ -2,7 +2,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::auth::{OAuthManager, TokenData, TokenStore};
+use crate::auth::{AccountType, OAuthManager, TokenData, TokenStore};
 use crate::teams::chatsvc::TeamsChatClient;
 use crate::teams::models::{ChatMessage, Conversation};
 use crate::teams::trouter::{TrouterClient, TrouterNotification};
@@ -11,7 +11,7 @@ use crate::{ConversationData, MainWindow, MessageData};
 
 #[derive(Debug, Clone)]
 pub enum UiCommand {
-    StartLogin,
+    StartLogin(AccountType),
     OpenBrowserLogin,
     Logout,
     RefreshConversations,
@@ -70,9 +70,9 @@ impl CoreWorker {
             if !saved_token.is_expired() {
                 self.setup_session(saved_token).await;
             } else if let Some(ref refresh_tok) = saved_token.refresh_token {
-                log::info!("Stored token expired, attempting refresh...");
+                log::info!("Stored token expired, attempting refresh for {:?}...", saved_token.account_type);
                 let oauth = OAuthManager::default();
-                if let Ok(new_token) = oauth.refresh_token(refresh_tok).await {
+                if let Ok(new_token) = oauth.refresh_token(refresh_tok, saved_token.account_type).await {
                     let _ = TokenStore::save(&new_token);
                     self.setup_session(new_token).await;
                 } else {
@@ -83,8 +83,8 @@ impl CoreWorker {
 
         while let Some(cmd) = self.rx_cmd.recv().await {
             match cmd {
-                UiCommand::StartLogin => {
-                    self.handle_login().await;
+                UiCommand::StartLogin(account_type) => {
+                    self.handle_login(account_type).await;
                 }
                 UiCommand::OpenBrowserLogin => {
                     let _ = open::that("https://login.microsoft.com/device");
@@ -142,18 +142,24 @@ impl CoreWorker {
         }
     }
 
-    async fn handle_login(&mut self) {
+    async fn handle_login(&mut self, account_type: AccountType) {
+        let type_desc = match account_type {
+            AccountType::WorkOrSchool => "Work/School",
+            AccountType::Personal => "Personal/Teams Free",
+        };
+        log::info!("Starting login flow for account type: {:?}", account_type);
+
         let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
-            status: "Requesting sign-in code from Microsoft...".into(),
+            status: format!("Requesting {} sign-in code from Microsoft...", type_desc),
             is_connected: false,
         }).await;
 
         let oauth = OAuthManager::default();
-        let device_code_resp = match oauth.request_device_code().await {
+        let device_code_resp = match oauth.request_device_code(account_type).await {
             Ok(resp) => resp,
             Err(e) => {
-                log::error!("Failed to request device code: {}", e);
-                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in initialization failed: {}", e))).await;
+                log::error!("Failed to request device code: {:#}", e);
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in initialization failed: {:#}", e))).await;
                 return;
             }
         };
@@ -178,14 +184,14 @@ impl CoreWorker {
 
         // Poll for authorization
         let poll_interval = device_code_resp.interval.unwrap_or(5);
-        match oauth.poll_device_code(&device_code_resp.device_code, poll_interval, device_code_resp.expires_in).await {
+        match oauth.poll_device_code(&device_code_resp.device_code, poll_interval, device_code_resp.expires_in, account_type).await {
             Ok(tokens) => {
                 let _ = TokenStore::save(&tokens);
                 self.setup_session(tokens).await;
             }
             Err(e) => {
-                log::error!("Sign-in polling error: {}", e);
-                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in failed: {}", e))).await;
+                log::error!("Sign-in polling error: {:#}", e);
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in failed: {:#}", e))).await;
             }
         }
     }
@@ -194,9 +200,12 @@ impl CoreWorker {
         let user_name = tokens.display_name.clone().unwrap_or_else(|| "Teams User".into());
         let email = tokens.user_email.clone().unwrap_or_default();
         let access_tok = tokens.access_token.clone();
+        let account_type = tokens.account_type;
+
+        log::info!("Setting up session for '{}' ({}) with account type {:?}", user_name, email, account_type);
 
         self.token = Some(tokens);
-        let mut chat_client = TeamsChatClient::new(access_tok.clone(), None);
+        let mut chat_client = TeamsChatClient::new(access_tok.clone(), account_type, None);
 
         // Exchange for SkypeToken via authsvc
         let push_token = match chat_client.exchange_skype_token().await {
@@ -324,16 +333,29 @@ pub fn attach_ui_bridge(
     let weak_window = window.as_weak();
 
     // Hook up UI callbacks to UiCommand channel
-    let tx_login = tx_cmd.clone();
-    let weak_login = weak_window.clone();
-    window.on_start_login(move || {
-        if let Some(win) = weak_login.upgrade() {
+    let tx_login_work = tx_cmd.clone();
+    let weak_login_work = weak_window.clone();
+    window.on_start_login_work(move || {
+        if let Some(win) = weak_login_work.upgrade() {
             win.set_is_authenticating(true);
-            win.set_login_status("Opening browser for Microsoft Sign-in...".into());
+            win.set_login_status("Opening browser for Work/School Sign-in...".into());
         }
-        let tx = tx_login.clone();
+        let tx = tx_login_work.clone();
         tokio::spawn(async move {
-            let _ = tx.send(UiCommand::StartLogin).await;
+            let _ = tx.send(UiCommand::StartLogin(AccountType::WorkOrSchool)).await;
+        });
+    });
+
+    let tx_login_personal = tx_cmd.clone();
+    let weak_login_personal = weak_window.clone();
+    window.on_start_login_personal(move || {
+        if let Some(win) = weak_login_personal.upgrade() {
+            win.set_is_authenticating(true);
+            win.set_login_status("Opening browser for Personal/Teams Free Sign-in...".into());
+        }
+        let tx = tx_login_personal.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::StartLogin(AccountType::Personal)).await;
         });
     });
 

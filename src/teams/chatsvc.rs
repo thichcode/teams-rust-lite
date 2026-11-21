@@ -5,22 +5,32 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use std::time::Duration;
 
+use crate::auth::AccountType;
 use super::models::{ChatMessage, ChatMessageListResponse, Conversation, ConversationListResponse, SendMessageRequest};
 
 pub const DEFAULT_CHATSVC_URL: &str = "https://chatsvcagg.teams.microsoft.com";
 pub const DEFAULT_AUTHSVC_URL: &str = "https://authsvc.teams.microsoft.com/v1.0/authz";
 
+pub const TEAMS_LIVE_CHATSVC_URL: &str = "https://teams.live.com/api/csa/api";
+pub const TEAMS_LIVE_AUTHSVC_URL: &str = "https://teams.live.com/api/authsvc/v1.0/authz";
+
 pub struct TeamsChatClient {
     base_url: String,
+    account_type: AccountType,
     http_client: Client,
     access_token: String,
     skype_token: Option<String>,
 }
 
 impl TeamsChatClient {
-    pub fn new(access_token: String, custom_base_url: Option<String>) -> Self {
+    pub fn new(access_token: String, account_type: AccountType, custom_base_url: Option<String>) -> Self {
+        let default_url = match account_type {
+            AccountType::WorkOrSchool => DEFAULT_CHATSVC_URL,
+            AccountType::Personal => TEAMS_LIVE_CHATSVC_URL,
+        };
+
         let base_url = custom_base_url
-            .unwrap_or_else(|| DEFAULT_CHATSVC_URL.to_string())
+            .unwrap_or_else(|| default_url.to_string())
             .trim_end_matches('/')
             .to_string();
 
@@ -40,6 +50,7 @@ impl TeamsChatClient {
 
         Self {
             base_url,
+            account_type,
             http_client,
             access_token,
             skype_token: None,
@@ -48,15 +59,47 @@ impl TeamsChatClient {
 
     /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
     pub async fn exchange_skype_token(&mut self) -> Result<String> {
-        log::info!("Calling authsvc token exchange at {}", DEFAULT_AUTHSVC_URL);
+        let authsvc_url = match self.account_type {
+            AccountType::WorkOrSchool => DEFAULT_AUTHSVC_URL,
+            AccountType::Personal => TEAMS_LIVE_AUTHSVC_URL,
+        };
+
+        log::info!("Calling authsvc token exchange at {} for {:?}", authsvc_url, self.account_type);
         let resp = self.http_client
-            .post(DEFAULT_AUTHSVC_URL)
+            .post(authsvc_url)
             .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
             .header(CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({}))
             .send()
-            .await
-            .context("Failed to connect to Teams authsvc")?;
+            .await;
+
+        let resp = match resp {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) if self.account_type == AccountType::Personal => {
+                log::warn!("Primary personal authsvc failed ({}), falling back to default authsvc...", r.status());
+                self.http_client
+                    .post(DEFAULT_AUTHSVC_URL)
+                    .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await
+                    .context("Failed to connect to fallback authsvc")?
+            }
+            Ok(r) => r,
+            Err(e) if self.account_type == AccountType::Personal => {
+                log::warn!("Connection to personal authsvc failed: {}. Falling back to default authsvc...", e);
+                self.http_client
+                    .post(DEFAULT_AUTHSVC_URL)
+                    .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await
+                    .context("Failed to connect to fallback authsvc")?
+            }
+            Err(e) => return Err(e).context("Failed to connect to Teams authsvc"),
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();

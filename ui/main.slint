@@ -54,7 +54,8 @@ export component MainWindow inherits Window {
     in-out property <string> theme-mode-icon: "🔄";
     in-out property <string> theme-status-text: "Auto (Solar)";
 
-    callback start-login();
+    callback start-login-work();
+    callback start-login-personal();
     callback open-browser-login();
     callback logout();
     callback select-conversation(string);
@@ -75,7 +76,8 @@ export component MainWindow inherits Window {
         theme-mode-icon: root.theme-mode-icon;
         is-update-available: root.is-update-available;
         update-info-text: root.update-info-text;
-        start-login => { root.start-login(); }
+        start-login-work => { root.start-login-work(); }
+        start-login-personal => { root.start-login-personal(); }
         open-browser-login => { root.open-browser-login(); }
         toggle-theme => { root.toggle-theme-mode(); }
         check-update => { root.check-for-updates(); }
