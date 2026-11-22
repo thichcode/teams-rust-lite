@@ -12,9 +12,8 @@ use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID for Microsoft Teams Personal / Teams for Life (Teams-T4L)
-// Registered for consumer accounts with Skype Spaces permissions and device code flow support
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "8ec6bc83-69c8-4392-8f08-b3c986009232";
+// First-party public client ID with native loopback support on Microsoft Accounts (Consumers / Hotmail / Outlook)
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
 // Fallback redirect URI
 #[allow(dead_code)]
 pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";

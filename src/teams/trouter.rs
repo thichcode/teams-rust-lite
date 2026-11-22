@@ -12,6 +12,7 @@ use url::Url;
 use super::models::ChatMessage;
 
 pub const DEFAULT_TROUTER_WS_URL: &str = "wss://go.trouter.teams.microsoft.com/v4/a";
+pub const SKYPE_TROUTER_WS_URL: &str = "wss://go.trouter.skype.com/v4/c";
 
 #[derive(Debug, Clone)]
 pub enum TrouterNotification {

@@ -149,16 +149,33 @@ impl CoreWorker {
     async fn handle_login(&mut self, account_type: AccountType) {
         log::info!("Starting login flow for account type: {:?}", account_type);
 
-        let type_desc = match account_type {
-            AccountType::WorkOrSchool => "Work/School",
-            AccountType::Personal => "Personal/Teams Free",
-        };
+        let oauth = OAuthManager::default();
+
+        if account_type == AccountType::Personal {
+            let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+                status: "Đang mở trình duyệt đăng nhập Teams Free... Vui lòng đăng nhập trên trình duyệt.".into(),
+                is_connected: false,
+            }).await;
+
+            match oauth.login_interactive_loopback(account_type).await {
+                Ok(tokens) => {
+                    let _ = TokenStore::save(&tokens);
+                    self.setup_session(tokens).await;
+                }
+                Err(e) => {
+                    log::error!("Personal loopback login error: {:#}", e);
+                    let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Đăng nhập Teams Free thất bại: {:#}", e))).await;
+                }
+            }
+            return;
+        }
+
+        let type_desc = "Work/School";
         let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
             status: format!("Đang yêu cầu mã xác thực {} từ Microsoft...", type_desc),
             is_connected: false,
         }).await;
 
-        let oauth = OAuthManager::default();
         let device_code_resp = match oauth.request_device_code(account_type).await {
             Ok(resp) => resp,
             Err(e) => {
@@ -264,7 +281,12 @@ impl CoreWorker {
 
         // Spawn Trouter real-time push service using push_token (SkypeToken)
         let (tx_trouter, mut rx_trouter) = mpsc::channel(100);
-        let trouter = TrouterClient::new(push_token, None, tx_trouter);
+        let trouter_url = if account_type == AccountType::Personal {
+            Some(crate::teams::trouter::SKYPE_TROUTER_WS_URL.to_string())
+        } else {
+            None
+        };
+        let trouter = TrouterClient::new(push_token, trouter_url, tx_trouter);
         tokio::spawn(async move {
             trouter.run_loop().await;
         });

@@ -13,7 +13,7 @@ pub const DEFAULT_AUTHSVC_URL: &str = "https://teams.microsoft.com/api/authsvc/v
 pub const FALLBACK_AUTHSVC_URL: &str = "https://authsvc.teams.microsoft.com/v1.0/authz";
 
 pub const TEAMS_LIVE_CHATSVC_URL: &str = "https://teams.live.com/api/chatsvc/consumer";
-pub const TEAMS_LIVE_AUTHSVC_URL: &str = "https://teams.live.com/api/auth/v1.0/authz/consumer";
+pub const TEAMS_LIVE_AUTHSVC_URL: &str = "https://teams.live.com/api/auth/v2.0/authz/consumer";
 
 pub struct TeamsChatClient {
     base_url: String,
@@ -49,12 +49,18 @@ impl TeamsChatClient {
             .build()
             .unwrap_or_default();
 
+        let skype_token = if account_type == AccountType::Personal {
+            Some(access_token.clone())
+        } else {
+            None
+        };
+
         Self {
             base_url,
             account_type,
             http_client,
             access_token,
-            skype_token: None,
+            skype_token,
         }
     }
 
@@ -70,8 +76,24 @@ impl TeamsChatClient {
         };
     }
 
+    pub fn set_skype_token(&mut self, token: Option<String>) {
+        self.skype_token = token;
+    }
+
     /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
     pub async fn exchange_skype_token(&mut self) -> Result<String> {
+        // If we already have a valid SkypeToken, or if current access_token is already a SkypeToken
+        if let Some(ref tok) = self.skype_token {
+            log::info!("Already have active SkypeToken (len: {})", tok.len());
+            return Ok(tok.clone());
+        }
+        if self.account_type == AccountType::Personal {
+            // For Personal accounts, access_token is typically already a SkypeToken from consumer auth
+            self.skype_token = Some(self.access_token.clone());
+            log::info!("Personal account using token as SkypeToken directly (len: {})", self.access_token.len());
+            return Ok(self.access_token.clone());
+        }
+
         let candidates: Vec<(&str, &str)> = match self.account_type {
             AccountType::Personal => vec![
                 (TEAMS_LIVE_AUTHSVC_URL, "POST"),
@@ -111,23 +133,31 @@ impl TeamsChatClient {
                     if status.is_success() {
                         match resp.json::<serde_json::Value>().await {
                             Ok(body) => {
-                                // Extract skypeToken
-                                let token_opt = body.get("tokens")
-                                    .and_then(|t| t.get("skypeToken"))
-                                    .and_then(|s| s.as_str())
-                                    .or_else(|| body.get("skypeToken").and_then(|s| s.as_str()))
-                                    .or_else(|| body.get("tokens").and_then(|t| t.get("token")).and_then(|s| s.as_str()))
-                                    .or_else(|| body.get("token").and_then(|s| s.as_str()))
-                                    .or_else(|| body.get("tokens").and_then(|t| t.get("skype_token")).and_then(|s| s.as_str()))
-                                    .map(|s| s.to_string());
+                                // Extract skypeToken (supports both Work and Personal response formats)
+                                let token_opt = body.get("skypeToken")
+                                    .and_then(|s| {
+                                        if let Some(str_val) = s.as_str() {
+                                            Some(str_val.to_string())
+                                        } else if let Some(obj) = s.as_object() {
+                                            obj.get("skypetoken").and_then(|st| st.as_str()).map(|st| st.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .or_else(|| body.get("tokens").and_then(|t| t.get("skypeToken")).and_then(|s| s.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| body.get("tokens").and_then(|t| t.get("token")).and_then(|s| s.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| body.get("token").and_then(|s| s.as_str()).map(|s| s.to_string()))
+                                    .or_else(|| body.get("tokens").and_then(|t| t.get("skype_token")).and_then(|s| s.as_str()).map(|s| s.to_string()));
 
                                 if let Some(skype_tok) = token_opt {
                                     log::info!("Successfully acquired SkypeToken from {} (len: {})", auth_url, skype_tok.len());
                                     self.skype_token = Some(skype_tok.clone());
 
                                     // Extract regional chatService URL if provided by authsvc
-                                    let chat_svc_url = body.get("chatServiceUri")
+                                    let chat_svc_url = body.get("regionGtms")
+                                        .and_then(|r| r.get("chatService").or_else(|| r.get("chatServiceAfd")))
                                         .and_then(|v| v.as_str())
+                                        .or_else(|| body.get("chatServiceUri").and_then(|v| v.as_str()))
                                         .or_else(|| body.get("chatService").and_then(|v| v.as_str()))
                                         .or_else(|| body.get("tokens").and_then(|t| t.get("chatService")).and_then(|v| v.as_str()))
                                         .or_else(|| body.get("tokens").and_then(|t| t.get("chatServiceUri")).and_then(|v| v.as_str()))
@@ -173,11 +203,12 @@ impl TeamsChatClient {
 
     /// Prepares request builder with required Teams authentication headers
     fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ref skype_tok) = self.skype_token {
+        let tok = self.skype_token.as_ref().unwrap_or(&self.access_token);
+        if self.account_type == AccountType::Personal || self.skype_token.is_some() {
             req = req
-                .header(AUTHORIZATION, format!("skypetoken={}", skype_tok))
-                .header("Authentication", format!("skypetoken_asm {}", skype_tok))
-                .header("x-skypetoken", skype_tok.as_str());
+                .header(AUTHORIZATION, format!("skypetoken={}", tok))
+                .header("Authentication", format!("skypetoken={}", tok))
+                .header("x-skypetoken", tok.as_str());
         } else {
             req = req
                 .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
@@ -324,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_apply_auth_headers() {
-        let mut client = TeamsChatClient::new("bearer_123".into(), AccountType::Personal, None);
+        let mut client = TeamsChatClient::new("bearer_123".into(), AccountType::WorkOrSchool, None);
         let req = reqwest::Client::new().get("https://example.com");
         let req = client.apply_auth(req);
         let built = req.build().unwrap();
@@ -336,5 +367,32 @@ mod tests {
         let built = req.build().unwrap();
         assert_eq!(built.headers().get("Authorization").unwrap(), "skypetoken=skype_456");
         assert_eq!(built.headers().get("x-skypetoken").unwrap(), "skype_456");
+
+        let client_personal = TeamsChatClient::new("skype_personal_789".into(), AccountType::Personal, None);
+        let req = reqwest::Client::new().get("https://example.com");
+        let req = client_personal.apply_auth(req);
+        let built = req.build().unwrap();
+        assert_eq!(built.headers().get("Authorization").unwrap(), "skypetoken=skype_personal_789");
+        assert_eq!(built.headers().get("x-skypetoken").unwrap(), "skype_personal_789");
+    }
+
+    #[tokio::test]
+    async fn test_live_session_conversations() {
+        if let Ok(Some(token_data)) = crate::auth::TokenStore::load() {
+            println!("Testing live session for: {:?}", token_data.user_email);
+            let mut client = TeamsChatClient::new(token_data.access_token.clone(), token_data.account_type, None);
+            let _ = client.exchange_skype_token().await;
+            let convs_res = client.get_conversations().await;
+            match convs_res {
+                Ok(convs) => {
+                    println!("LIVE TEST SUCCESS: Loaded {} conversations!", convs.len());
+                }
+                Err(e) => {
+                    panic!("Live get_conversations failed: {:#}", e);
+                }
+            }
+        } else {
+            println!("No stored session found, skipping live session test");
+        }
     }
 }
