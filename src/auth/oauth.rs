@@ -12,8 +12,8 @@ use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID with native loopback support on Microsoft Accounts (Consumers / Hotmail / Outlook)
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+// First-party public client ID for Microsoft Teams Desktop, authorized for Personal (common tenant) and Work/School
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
 // Fallback redirect URI
 #[allow(dead_code)]
 pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
@@ -96,7 +96,7 @@ impl OAuthManager {
     pub async fn request_device_code(&self, account_type: AccountType) -> Result<DeviceCodeResponse> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
         };
         let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode", tenant);
         log::info!("Requesting device code from {} with client_id {} for {:?}", url, client_id, account_type);
@@ -132,7 +132,7 @@ impl OAuthManager {
     ) -> Result<TokenData> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Polling token endpoint at {} with client_id {} for {:?}", token_url, client_id, account_type);
@@ -216,7 +216,7 @@ impl OAuthManager {
     pub async fn refresh_token(&self, refresh_token: &str, account_type: AccountType) -> Result<TokenData> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Refreshing token at {} with client_id {} for {:?}", token_url, client_id, account_type);
@@ -276,7 +276,7 @@ impl OAuthManager {
             ),
             AccountType::Personal => (
                 TEAMS_PERSONAL_CLIENT_ID,
-                "consumers",
+                "common",
             ),
         };
 

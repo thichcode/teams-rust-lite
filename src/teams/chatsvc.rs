@@ -91,16 +91,18 @@ impl TeamsChatClient {
         let candidates: Vec<(&str, &str)> = match self.account_type {
             AccountType::Personal => vec![
                 (TEAMS_LIVE_AUTHSVC_URL, "POST"),
-                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
+                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
                 (DEFAULT_AUTHSVC_URL, "POST"),
                 (DEFAULT_AUTHSVC_URL, "GET"),
                 (FALLBACK_AUTHSVC_URL, "POST"),
+                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
             ],
             AccountType::WorkOrSchool => vec![
                 (DEFAULT_AUTHSVC_URL, "POST"),
                 (DEFAULT_AUTHSVC_URL, "GET"),
                 (FALLBACK_AUTHSVC_URL, "POST"),
                 (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
             ],
         };
 

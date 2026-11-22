@@ -73,7 +73,15 @@ impl CoreWorker {
         // Check if existing token exists in Windows Credential Manager
         if let Ok(Some(saved_token)) = TokenStore::load() {
             log::info!("Found stored credentials in Windows Keyring");
-            if !saved_token.is_expired() {
+            // Check if saved token is from obsolete Azure CLI or invalid format
+            let is_stale_azure_cli = saved_token.access_token.starts_with("EwAoB")
+                && saved_token.account_type == AccountType::Personal;
+
+            if is_stale_azure_cli {
+                log::warn!("Detected obsolete Azure CLI session token in TokenStore. Clearing stale session...");
+                let _ = TokenStore::clear();
+                let _ = self.tx_event.send(CoreEvent::AuthFailed("Phiên đăng nhập cũ không tương thích. Vui lòng đăng nhập lại trên trình duyệt.".into())).await;
+            } else if !saved_token.is_expired() {
                 self.setup_session(saved_token).await;
             } else if let Some(ref refresh_tok) = saved_token.refresh_token {
                 log::info!("Stored token expired, attempting refresh for {:?}...", saved_token.account_type);
@@ -82,6 +90,7 @@ impl CoreWorker {
                     let _ = TokenStore::save(&new_token);
                     self.setup_session(new_token).await;
                 } else {
+                    let _ = TokenStore::clear();
                     let _ = self.tx_event.send(CoreEvent::AuthFailed("Saved session expired. Please sign in again.".into())).await;
                 }
             }
@@ -266,6 +275,13 @@ impl CoreWorker {
             }
             Err(e) => {
                 log::warn!("authsvc token exchange failed: {}. Falling back to access_token...", e);
+                let err_str = e.to_string();
+                if err_str.contains("401") || err_str.contains("Unauthorized") {
+                    log::error!("Access token rejected by authsvc (HTTP 401). Invalidating stored session.");
+                    let _ = TokenStore::clear();
+                    let _ = self.tx_event.send(CoreEvent::AuthFailed("Phiên làm việc không hợp lệ (HTTP 401). Vui lòng đăng nhập lại.".into())).await;
+                    return;
+                }
                 access_tok.clone()
             }
         };
@@ -344,7 +360,13 @@ impl CoreWorker {
                 }
                 Err(e) => {
                     log::warn!("Failed to fetch conversations: {}", e);
-                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("{}", e))).await;
+                    let err_str = e.to_string();
+                    if err_str.contains("401") || err_str.contains("Unauthorized") {
+                        let _ = TokenStore::clear();
+                        let _ = self.tx_event.send(CoreEvent::AuthFailed("Phiên làm việc hết hạn (HTTP 401). Vui lòng đăng nhập lại.".into())).await;
+                    } else {
+                        let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("{}", e))).await;
+                    }
                 }
             }
         }
