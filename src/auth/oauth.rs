@@ -10,10 +10,12 @@ use tokio::time::sleep;
 
 use super::token_store::{AccountType, TokenData};
 
-// Standard public client ID for Microsoft Teams (supports both Work/School and Personal accounts)
+// Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID for Microsoft Teams Free / Personal accounts
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
+// First-party public client ID for Microsoft Office (supports Personal / Consumer MSA accounts)
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "d3590ed6-52b3-4102-aeff-aad2292ab01c";
+// Native client redirect URI registered for Office client on MSA
+pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
 
 #[allow(dead_code)]
 pub const DEFAULT_CLIENT_ID: &str = TEAMS_WORK_CLIENT_ID;
@@ -253,7 +255,8 @@ impl OAuthManager {
     }
 
     /// Interactive browser login via local loopback listener (RFC 8252)
-    /// Perfect for Personal / Teams Free accounts (Hotmail, Outlook, Gmail) which are rejected on device code flow
+    /// For Work/School: uses Teams client ID with localhost redirect (direct callback)
+    /// For Personal/Teams Free: uses Office client ID with nativeclient redirect + localhost relay page
     pub async fn login_interactive_loopback(
         &self,
         account_type: AccountType,
@@ -262,11 +265,18 @@ impl OAuthManager {
             .await
             .context("Failed to bind loopback TCP listener")?;
         let port = listener.local_addr()?.port();
-        let redirect_uri = format!("http://localhost:{}", port);
 
-        let (client_id, tenant) = match account_type {
-            AccountType::WorkOrSchool => (self.get_client_id(account_type), "organizations"),
-            AccountType::Personal => (TEAMS_PERSONAL_CLIENT_ID, "common"),
+        let (client_id, tenant, redirect_uri) = match account_type {
+            AccountType::WorkOrSchool => (
+                self.get_client_id(account_type),
+                "organizations",
+                format!("http://localhost:{}", port),
+            ),
+            AccountType::Personal => (
+                TEAMS_PERSONAL_CLIENT_ID,
+                "consumers",
+                NATIVE_CLIENT_REDIRECT.to_string(),
+            ),
         };
 
         let (verifier, challenge) = generate_pkce();
@@ -290,76 +300,149 @@ impl OAuthManager {
             challenge
         );
 
-        log::info!("Opening system browser for interactive loopback login on port {}: {}", port, auth_url);
-        let _ = open::that(&auth_url);
+        match account_type {
+            AccountType::WorkOrSchool => {
+                // Direct loopback: browser redirects back to http://localhost:PORT/?code=...
+                log::info!("Opening browser for Work/School loopback login on port {}", port);
+                let _ = open::that(&auth_url);
 
-        // Wait for connection on loopback listener with a timeout (e.g. 5 minutes)
-        let timeout_duration = Duration::from_secs(300);
-        let (mut socket, _) = tokio::time::timeout(timeout_duration, listener.accept())
-            .await
-            .context("Timed out waiting for browser sign-in")?
-            .context("Failed to accept connection on loopback listener")?;
+                let timeout_duration = Duration::from_secs(300);
+                let (mut socket, _) = tokio::time::timeout(timeout_duration, listener.accept())
+                    .await
+                    .context("Timed out waiting for browser sign-in")?
+                    .context("Failed to accept connection on loopback listener")?;
 
-        let mut buf = [0u8; 4096];
-        let n = socket.read(&mut buf).await.context("Failed to read from socket")?;
-        let req_str = String::from_utf8_lossy(&buf[..n]);
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.context("Failed to read from socket")?;
+                let req_str = String::from_utf8_lossy(&buf[..n]);
 
-        // Parse query string from GET request: "GET /?code=...&state=... HTTP/1.1"
-        let req_line = req_str.lines().next().unwrap_or_default();
-        let path = req_line.split_whitespace().nth(1).unwrap_or("/");
+                let req_line = req_str.lines().next().unwrap_or_default();
+                let path = req_line.split_whitespace().nth(1).unwrap_or("/");
 
-        let full_url = format!("http://localhost{}", path);
-        let parsed_url = url::Url::parse(&full_url).context("Failed to parse callback URL")?;
+                let full_url = format!("http://localhost{}", path);
+                let parsed_url = url::Url::parse(&full_url).context("Failed to parse callback URL")?;
 
-        let mut code_opt = None;
-        let mut error_opt = None;
+                let (code_opt, error_opt) = extract_code_from_url(&parsed_url);
 
-        for (k, v) in parsed_url.query_pairs() {
-            if k == "code" {
-                code_opt = Some(v.to_string());
-            } else if k == "error" || k == "error_description" {
-                error_opt = Some(v.to_string());
+                let html_body = success_or_error_html(code_opt.is_some());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    html_body.len(), html_body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+
+                if let Some(err) = error_opt {
+                    bail!("Microsoft login error: {}", err);
+                }
+
+                let code = code_opt.context("No authorization code received in callback")?;
+                log::info!("Received authorization code (len: {}). Exchanging for tokens...", code.len());
+                self.exchange_code_for_tokens(&code, client_id, tenant, &redirect_uri, &verifier, account_type).await
+            }
+            AccountType::Personal => {
+                // Personal flow: nativeclient redirect + localhost relay page
+                // 1. Serve a relay page on localhost that opens auth URL and provides paste-back UI
+                // 2. After Microsoft redirects to nativeclient?code=..., user copies URL and
+                //    pastes it, or we serve a page that auto-detects via clipboard
+                log::info!("Opening browser for Personal login with nativeclient redirect, relay on port {}", port);
+
+                // First open the auth URL directly - user logs in, gets redirected to nativeclient
+                let _ = open::that(&auth_url);
+
+                // Also open the relay page on localhost (for pasting the callback URL)
+                let relay_url = format!("http://localhost:{}/relay", port);
+                let _ = open::that(&relay_url);
+
+                let timeout_duration = Duration::from_secs(300);
+                let code = self.serve_personal_relay(listener, timeout_duration).await?;
+
+                log::info!("Received authorization code from relay (len: {}). Exchanging for tokens...", code.len());
+                self.exchange_code_for_tokens(&code, client_id, tenant, &redirect_uri, &verifier, account_type).await
             }
         }
+    }
 
-        let html_body = if code_opt.is_some() {
-            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
-             <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
-             .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
-             h2{color:#a6e3a1;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
-             <body><div class='card'><h2>✅ Đăng nhập Microsoft Teams Lite thành công!</h2>\
-             <p>Bạn có thể đóng tab trình duyệt này và quay lại ứng dụng.</p></div></body></html>"
-        } else {
-            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
-             <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
-             .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
-             h2{color:#f38ba8;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
-             <body><div class='card'><h2>❌ Đăng nhập không thành công</h2>\
-             <p>Vui lòng thử lại trong ứng dụng.</p></div></body></html>"
-        };
+    /// Serves a relay page on localhost for Personal account login
+    /// The page has a text input where the user pastes the nativeclient callback URL
+    /// and auto-submits it back to localhost for code extraction
+    async fn serve_personal_relay(
+        &self,
+        listener: tokio::net::TcpListener,
+        timeout: Duration,
+    ) -> Result<String> {
+        let deadline = tokio::time::Instant::now() + timeout;
 
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            html_body.len(),
-            html_body
-        );
-        let _ = socket.write_all(response.as_bytes()).await;
-        let _ = socket.shutdown().await;
+        loop {
+            let accept_result = tokio::time::timeout_at(deadline, listener.accept()).await;
+            let (mut socket, _) = match accept_result {
+                Ok(Ok(conn)) => conn,
+                Ok(Err(e)) => {
+                    log::warn!("Relay listener accept error: {}", e);
+                    continue;
+                }
+                Err(_) => bail!("Timed out waiting for Personal sign-in paste-back"),
+            };
 
-        if let Some(err) = error_opt {
-            bail!("Microsoft login error: {}", err);
+            let mut buf = [0u8; 8192];
+            let n = match socket.read(&mut buf).await {
+                Ok(n) if n > 0 => n,
+                _ => continue,
+            };
+            let req_str = String::from_utf8_lossy(&buf[..n]);
+            let req_line = req_str.lines().next().unwrap_or_default();
+            let path = req_line.split_whitespace().nth(1).unwrap_or("/");
+
+            if path.starts_with("/callback") {
+                // User submitted the nativeclient URL via the relay page form
+                let full_url = format!("http://localhost{}", path);
+                if let Ok(parsed) = url::Url::parse(&full_url) {
+                    let (code_opt, error_opt) = extract_code_from_url(&parsed);
+
+                    let html_body = success_or_error_html(code_opt.is_some());
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html_body.len(), html_body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+
+                    if let Some(err) = error_opt {
+                        bail!("Microsoft login error: {}", err);
+                    }
+                    if let Some(code) = code_opt {
+                        return Ok(code);
+                    }
+                }
+            } else {
+                // Serve the relay page HTML
+                let relay_html = PERSONAL_RELAY_HTML;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    relay_html.len(), relay_html
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
         }
+    }
 
-        let code = code_opt.context("No authorization code received in callback")?;
-        log::info!("Received authorization code (len: {}). Exchanging for tokens...", code.len());
-
+    async fn exchange_code_for_tokens(
+        &self,
+        code: &str,
+        client_id: &str,
+        tenant: &str,
+        redirect_uri: &str,
+        verifier: &str,
+        account_type: AccountType,
+    ) -> Result<TokenData> {
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         let params = [
             ("client_id", client_id),
             ("grant_type", "authorization_code"),
-            ("code", &code),
-            ("redirect_uri", &redirect_uri),
-            ("code_verifier", &verifier),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", verifier),
             ("scope", DEFAULT_SCOPES),
         ];
 
@@ -464,3 +547,98 @@ fn generate_pkce() -> (String, String) {
     let challenge = URL_SAFE_NO_PAD.encode(hash);
     (verifier, challenge)
 }
+
+/// Extract authorization code and error from a parsed URL's query parameters
+fn extract_code_from_url(parsed_url: &url::Url) -> (Option<String>, Option<String>) {
+    let mut code_opt = None;
+    let mut error_opt = None;
+    for (k, v) in parsed_url.query_pairs() {
+        if k == "code" {
+            code_opt = Some(v.to_string());
+        } else if k == "error" || k == "error_description" {
+            error_opt = Some(v.to_string());
+        }
+    }
+    (code_opt, error_opt)
+}
+
+/// Generate success or error HTML response body
+fn success_or_error_html(success: bool) -> &'static str {
+    if success {
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
+         <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
+         .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
+         h2{color:#a6e3a1;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
+         <body><div class='card'><h2>✅ Đăng nhập Microsoft Teams Lite thành công!</h2>\
+         <p>Bạn có thể đóng tab trình duyệt này và quay lại ứng dụng.</p></div></body></html>"
+    } else {
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
+         <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
+         .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
+         h2{color:#f38ba8;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
+         <body><div class='card'><h2>❌ Đăng nhập không thành công</h2>\
+         <p>Vui lòng thử lại trong ứng dụng.</p></div></body></html>"
+    }
+}
+
+/// HTML relay page for Personal account login
+/// After Microsoft login redirects to nativeclient?code=..., the user copies the full URL
+/// from the browser address bar and pastes it into this relay page, which extracts the code
+/// and sends it back to localhost.
+const PERSONAL_RELAY_HTML: &str = r#"<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>Teams Lite - Đăng nhập Cá nhân</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#1e1e2e;color:#cdd6f4;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#313244;border-radius:16px;padding:40px;max-width:560px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+h2{color:#89b4fa;font-size:22px;margin-bottom:8px;text-align:center}
+.subtitle{color:#a6adc8;font-size:14px;text-align:center;margin-bottom:24px}
+.steps{background:#1e1e2e;border-radius:10px;padding:20px;margin-bottom:20px}
+.step{display:flex;gap:12px;margin-bottom:14px;align-items:flex-start}
+.step:last-child{margin-bottom:0}
+.num{background:#89b4fa;color:#1e1e2e;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0}
+.step-text{color:#bac2de;font-size:14px;line-height:1.5}
+.step-text b{color:#cdd6f4}
+.input-group{margin-bottom:16px}
+label{color:#a6adc8;font-size:13px;display:block;margin-bottom:6px}
+input[type=text]{width:100%;padding:12px 16px;background:#45475a;border:2px solid #585b70;border-radius:8px;color:#cdd6f4;font-size:14px;outline:none;transition:border-color 0.2s}
+input[type=text]:focus{border-color:#89b4fa}
+input[type=text]::placeholder{color:#6c7086}
+.btn{width:100%;padding:14px;background:#89b4fa;color:#1e1e2e;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;transition:background 0.2s}
+.btn:hover{background:#74c7ec}
+.btn:disabled{background:#585b70;cursor:not-allowed}
+.error{color:#f38ba8;font-size:13px;margin-top:8px;display:none}
+.success{color:#a6e3a1;font-size:15px;text-align:center;padding:20px;display:none}
+</style></head>
+<body>
+<div class="card">
+<h2>🔐 Đăng nhập Tài khoản Cá nhân</h2>
+<p class="subtitle">Hotmail, Outlook, Gmail — Teams Free</p>
+<div class="steps">
+<div class="step"><div class="num">1</div><div class="step-text">Đăng nhập tài khoản Microsoft ở <b>tab trình duyệt khác</b> đã mở</div></div>
+<div class="step"><div class="num">2</div><div class="step-text">Sau khi đăng nhập xong, trình duyệt sẽ chuyển đến <b>trang trắng</b>. <b>Copy toàn bộ URL</b> từ thanh địa chỉ</div></div>
+<div class="step"><div class="num">3</div><div class="step-text"><b>Dán URL</b> vào ô bên dưới rồi nhấn nút xác nhận</div></div>
+</div>
+<div class="input-group">
+<label>Dán URL callback (bắt đầu bằng https://login.microsoftonline.com/...?code=...)</label>
+<input type="text" id="url-input" placeholder="Dán URL từ thanh địa chỉ trình duyệt vào đây..." autofocus>
+</div>
+<div class="error" id="error-msg"></div>
+<button class="btn" id="submit-btn" onclick="submitUrl()">✅ Xác nhận đăng nhập</button>
+<div class="success" id="success-msg">✅ Đăng nhập thành công! Đang chuyển hướng...</div>
+</div>
+<script>
+function submitUrl(){
+  var url=document.getElementById('url-input').value.trim();
+  var err=document.getElementById('error-msg');
+  var btn=document.getElementById('submit-btn');
+  err.style.display='none';
+  if(!url){err.textContent='Vui lòng dán URL vào ô trên.';err.style.display='block';return}
+  var m=url.match(/[?&]code=([^&]+)/);
+  if(!m){err.textContent='URL không hợp lệ. Hãy copy toàn bộ URL từ thanh địa chỉ sau khi trang trắng hiện ra.';err.style.display='block';return}
+  btn.disabled=true;btn.textContent='Đang xử lý...';
+  window.location.href='/callback?code='+encodeURIComponent(m[1]);
+}
+document.getElementById('url-input').addEventListener('keypress',function(e){if(e.key==='Enter')submitUrl()});
+</script>
+</body></html>"#;
