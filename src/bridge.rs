@@ -200,21 +200,43 @@ impl CoreWorker {
         }
     }
 
-    async fn setup_session(&mut self, tokens: TokenData) {
+    async fn setup_session(&mut self, mut tokens: TokenData) {
         let user_name = tokens.display_name.clone().unwrap_or_else(|| "Teams User".into());
         let email = tokens.user_email.clone().unwrap_or_default();
         let access_tok = tokens.access_token.clone();
+
+        // Auto-detect Personal consumer accounts (e.g. @hotmail.com, @outlook.com, @live.com, etc.)
+        let is_consumer_email = email.to_lowercase().ends_with("@hotmail.com")
+            || email.to_lowercase().ends_with("@outlook.com")
+            || email.to_lowercase().ends_with("@live.com")
+            || email.to_lowercase().ends_with("@msn.com")
+            || email.to_lowercase().ends_with("@gmail.com")
+            || email.to_lowercase().ends_with("@yahoo.com");
+
+        if is_consumer_email && tokens.account_type != AccountType::Personal {
+            log::info!("Detected consumer email ({}) - automatically switching account type to Personal", email);
+            tokens.account_type = AccountType::Personal;
+            let _ = TokenStore::save(&tokens);
+        }
+
         let account_type = tokens.account_type;
 
         log::info!("Setting up session for '{}' ({}) with account type {:?}", user_name, email, account_type);
 
-        self.token = Some(tokens);
+        self.token = Some(tokens.clone());
         let mut chat_client = TeamsChatClient::new(access_tok.clone(), account_type, None);
 
-        // Exchange for SkypeToken via authsvc
+        // Exchange for SkypeToken via authsvc (with automatic fallback and detection)
         let push_token = match chat_client.exchange_skype_token().await {
             Ok(skype_tok) => {
                 log::info!("Successfully acquired Teams SkypeToken from authsvc!");
+                // If chat client switched account type, persist it
+                if chat_client.account_type() != tokens.account_type {
+                    log::info!("Syncing dynamic account type {:?} to TokenStore", chat_client.account_type());
+                    tokens.account_type = chat_client.account_type();
+                    let _ = TokenStore::save(&tokens);
+                    self.token = Some(tokens.clone());
+                }
                 skype_tok
             }
             Err(e) => {
@@ -277,7 +299,7 @@ impl CoreWorker {
 
     async fn refresh_conversations(&self) {
         if let Some(ref client_lock) = self.chat_client {
-            let client = client_lock.lock().await;
+            let mut client = client_lock.lock().await;
             match client.get_conversations().await {
                 Ok(conversations) => {
                     let count = conversations.len();
