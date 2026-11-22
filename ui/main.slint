@@ -225,6 +225,23 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+
+                        // Logout button
+                        touch-main-logout := TouchArea {
+                            width: 28px;
+                            height: 28px;
+                            clicked => { root.logout(); }
+                            Rectangle {
+                                border-radius: 4px;
+                                background: touch-main-logout.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                Text {
+                                    text: "🚪";
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -283,6 +300,10 @@ export component MainWindow inherits Window {
                                 Button {
                                     text: "📄 Xem Log";
                                     clicked => { root.open-logs(); }
+                                }
+                                Button {
+                                    text: "🚪 Đăng xuất";
+                                    clicked => { root.logout(); }
                                 }
                             }
                         }

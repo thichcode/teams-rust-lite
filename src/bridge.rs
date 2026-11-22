@@ -89,13 +89,14 @@ impl CoreWorker {
                     self.handle_login(account_type).await;
                 }
                 UiCommand::OpenBrowserLogin => {
-                    let url = self.latest_verification_url.clone().unwrap_or_else(|| "https://login.microsoft.com/device".to_string());
+                    let url = self.latest_verification_url.clone().unwrap_or_else(|| "https://www.microsoft.com/link".to_string());
                     let _ = open::that(&url);
                 }
                 UiCommand::Logout => {
                     let _ = TokenStore::clear();
                     self.token = None;
                     self.chat_client = None;
+                    let _ = self.tx_event.send(CoreEvent::AuthFailed("Đã đăng xuất. Vui lòng chọn tài khoản để đăng nhập.".into())).await;
                     let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
                         status: "Logged out".into(),
                         is_connected: false,
@@ -148,29 +149,12 @@ impl CoreWorker {
     async fn handle_login(&mut self, account_type: AccountType) {
         log::info!("Starting login flow for account type: {:?}", account_type);
 
-        if account_type == AccountType::Personal {
-            let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
-                status: "Đang mở trình duyệt để đăng nhập tài khoản cá nhân...".into(),
-                is_connected: false,
-            }).await;
-
-            let oauth = OAuthManager::default();
-            match oauth.login_interactive_loopback(account_type).await {
-                Ok(tokens) => {
-                    let _ = TokenStore::save(&tokens);
-                    self.setup_session(tokens).await;
-                }
-                Err(e) => {
-                    log::error!("Personal interactive sign-in error: {:#}", e);
-                    let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Đăng nhập thất bại: {:#}", e))).await;
-                }
-            }
-            return;
-        }
-
-        let type_desc = "Work/School";
+        let type_desc = match account_type {
+            AccountType::WorkOrSchool => "Work/School",
+            AccountType::Personal => "Personal/Teams Free",
+        };
         let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
-            status: format!("Requesting {} sign-in code from Microsoft...", type_desc),
+            status: format!("Đang yêu cầu mã xác thực {} từ Microsoft...", type_desc),
             is_connected: false,
         }).await;
 
@@ -179,7 +163,7 @@ impl CoreWorker {
             Ok(resp) => resp,
             Err(e) => {
                 log::error!("Failed to request device code: {:#}", e);
-                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in initialization failed: {:#}", e))).await;
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Khởi tạo đăng nhập thất bại: {:#}", e))).await;
                 return;
             }
         };
@@ -212,7 +196,7 @@ impl CoreWorker {
             }
             Err(e) => {
                 log::error!("Sign-in polling error: {:#}", e);
-                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Sign-in failed: {:#}", e))).await;
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Đăng nhập thất bại: {:#}", e))).await;
             }
         }
     }

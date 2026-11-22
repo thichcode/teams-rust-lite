@@ -12,8 +12,9 @@ use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID with native loopback support on Microsoft Accounts (Consumers / Hotmail / Outlook)
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+// First-party public client ID for Microsoft Teams Personal / Teams for Life (Teams-T4L)
+// Registered for consumer accounts with Skype Spaces permissions and device code flow support
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "8ec6bc83-69c8-4392-8f08-b3c986009232";
 // Fallback redirect URI
 #[allow(dead_code)]
 pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
@@ -258,6 +259,7 @@ impl OAuthManager {
     /// Interactive browser login via local loopback listener (RFC 8252)
     /// For Work/School: uses Teams client ID with localhost redirect (direct callback)
     /// For Personal/Teams Free: uses Office client ID with nativeclient redirect + localhost relay page
+    #[allow(dead_code)]
     pub async fn login_interactive_loopback(
         &self,
         account_type: AccountType,
@@ -312,6 +314,7 @@ impl OAuthManager {
 
     /// Serves loopback listener on localhost for authorization callback
     /// Handles both direct Microsoft redirect (/?code=...) and manual paste form (/callback?code=...)
+    #[allow(dead_code)]
     async fn serve_personal_relay(
         &self,
         listener: tokio::net::TcpListener,
@@ -373,6 +376,7 @@ impl OAuthManager {
         }
     }
 
+    #[allow(dead_code)]
     async fn exchange_code_for_tokens(
         &self,
         code: &str,
@@ -483,6 +487,7 @@ pub fn parse_jwt_claims(token: &str) -> Option<(Option<String>, Option<String>, 
     Some((name, email, uid))
 }
 
+#[allow(dead_code)]
 fn generate_pkce() -> (String, String) {
     let mut random_bytes = [0u8; 32];
     getrandom::getrandom(&mut random_bytes).expect("Failed to get random bytes");
@@ -495,6 +500,7 @@ fn generate_pkce() -> (String, String) {
 }
 
 /// Extract authorization code and error from a parsed URL's query parameters
+#[allow(dead_code)]
 fn extract_code_from_url(parsed_url: &url::Url) -> (Option<String>, Option<String>) {
     let mut code_opt = None;
     let mut error_opt = None;
@@ -509,6 +515,7 @@ fn extract_code_from_url(parsed_url: &url::Url) -> (Option<String>, Option<Strin
 }
 
 /// Generate success or error HTML response body
+#[allow(dead_code)]
 fn success_or_error_html(success: bool) -> &'static str {
     if success {
         "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
@@ -531,6 +538,7 @@ fn success_or_error_html(success: bool) -> &'static str {
 /// After Microsoft login redirects to nativeclient?code=..., the user copies the full URL
 /// from the browser address bar and pastes it into this relay page, which extracts the code
 /// and sends it back to localhost.
+#[allow(dead_code)]
 const PERSONAL_RELAY_HTML: &str = r#"<!DOCTYPE html>
 <html><head><meta charset='utf-8'><title>Teams Lite - Đăng nhập Cá nhân</title>
 <style>

@@ -306,3 +306,35 @@ impl TeamsChatClient {
         Ok(sent)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chatsvc_urls_and_account_types() {
+        let client_work = TeamsChatClient::new("token123".into(), AccountType::WorkOrSchool, None);
+        assert_eq!(client_work.account_type(), AccountType::WorkOrSchool);
+        assert_eq!(client_work.base_url, DEFAULT_CHATSVC_URL);
+
+        let client_personal = TeamsChatClient::new("token123".into(), AccountType::Personal, None);
+        assert_eq!(client_personal.account_type(), AccountType::Personal);
+        assert_eq!(client_personal.base_url, TEAMS_LIVE_CHATSVC_URL);
+    }
+
+    #[test]
+    fn test_apply_auth_headers() {
+        let mut client = TeamsChatClient::new("bearer_123".into(), AccountType::Personal, None);
+        let req = reqwest::Client::new().get("https://example.com");
+        let req = client.apply_auth(req);
+        let built = req.build().unwrap();
+        assert_eq!(built.headers().get("Authorization").unwrap(), "Bearer bearer_123");
+
+        client.skype_token = Some("skype_456".into());
+        let req = reqwest::Client::new().get("https://example.com");
+        let req = client.apply_auth(req);
+        let built = req.build().unwrap();
+        assert_eq!(built.headers().get("Authorization").unwrap(), "skypetoken=skype_456");
+        assert_eq!(built.headers().get("x-skypetoken").unwrap(), "skype_456");
+    }
+}
