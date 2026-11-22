@@ -1,7 +1,11 @@
 use anyhow::{bail, Context, Result};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
 
 use super::token_store::{AccountType, TokenData};
@@ -248,6 +252,154 @@ impl OAuthManager {
         })
     }
 
+    /// Interactive browser login via local loopback listener (RFC 8252)
+    /// Perfect for Personal / Teams Free accounts (Hotmail, Outlook, Gmail) which are rejected on device code flow
+    pub async fn login_interactive_loopback(
+        &self,
+        account_type: AccountType,
+    ) -> Result<TokenData> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .context("Failed to bind loopback TCP listener")?;
+        let port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://localhost:{}", port);
+
+        let (client_id, tenant) = match account_type {
+            AccountType::WorkOrSchool => (self.get_client_id(account_type), "organizations"),
+            AccountType::Personal => (TEAMS_PERSONAL_CLIENT_ID, "consumers"),
+        };
+
+        let (verifier, challenge) = generate_pkce();
+        let state = uuid::Uuid::new_v4().to_string();
+
+        let auth_url = format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize?\
+             client_id={}&\
+             response_type=code&\
+             redirect_uri={}&\
+             response_mode=query&\
+             scope={}&\
+             state={}&\
+             code_challenge={}&\
+             code_challenge_method=S256",
+            tenant,
+            client_id,
+            urlencoding::encode(&redirect_uri),
+            urlencoding::encode(DEFAULT_SCOPES),
+            state,
+            challenge
+        );
+
+        log::info!("Opening system browser for interactive loopback login on port {}: {}", port, auth_url);
+        let _ = open::that(&auth_url);
+
+        // Wait for connection on loopback listener with a timeout (e.g. 5 minutes)
+        let timeout_duration = Duration::from_secs(300);
+        let (mut socket, _) = tokio::time::timeout(timeout_duration, listener.accept())
+            .await
+            .context("Timed out waiting for browser sign-in")?
+            .context("Failed to accept connection on loopback listener")?;
+
+        let mut buf = [0u8; 4096];
+        let n = socket.read(&mut buf).await.context("Failed to read from socket")?;
+        let req_str = String::from_utf8_lossy(&buf[..n]);
+
+        // Parse query string from GET request: "GET /?code=...&state=... HTTP/1.1"
+        let req_line = req_str.lines().next().unwrap_or_default();
+        let path = req_line.split_whitespace().nth(1).unwrap_or("/");
+
+        let full_url = format!("http://localhost{}", path);
+        let parsed_url = url::Url::parse(&full_url).context("Failed to parse callback URL")?;
+
+        let mut code_opt = None;
+        let mut error_opt = None;
+
+        for (k, v) in parsed_url.query_pairs() {
+            if k == "code" {
+                code_opt = Some(v.to_string());
+            } else if k == "error" || k == "error_description" {
+                error_opt = Some(v.to_string());
+            }
+        }
+
+        let html_body = if code_opt.is_some() {
+            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
+             <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
+             .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
+             h2{color:#a6e3a1;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
+             <body><div class='card'><h2>✅ Đăng nhập Microsoft Teams Lite thành công!</h2>\
+             <p>Bạn có thể đóng tab trình duyệt này và quay lại ứng dụng.</p></div></body></html>"
+        } else {
+            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Teams Lite Login</title>\
+             <style>body{font-family:Segoe UI,sans-serif;text-align:center;padding:50px;background:#1e1e2e;color:#cdd6f4}\
+             .card{background:#313244;border-radius:12px;padding:32px;display:inline-block;box-shadow:0 8px 24px rgba(0,0,0,0.3)}\
+             h2{color:#f38ba8;margin:0 0 12px}p{color:#a6adc8;margin:0}</style></head>\
+             <body><div class='card'><h2>❌ Đăng nhập không thành công</h2>\
+             <p>Vui lòng thử lại trong ứng dụng.</p></div></body></html>"
+        };
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html_body.len(),
+            html_body
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = socket.shutdown().await;
+
+        if let Some(err) = error_opt {
+            bail!("Microsoft login error: {}", err);
+        }
+
+        let code = code_opt.context("No authorization code received in callback")?;
+        log::info!("Received authorization code (len: {}). Exchanging for tokens...", code.len());
+
+        let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
+        let params = [
+            ("client_id", client_id),
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", &redirect_uri),
+            ("code_verifier", &verifier),
+            ("scope", DEFAULT_SCOPES),
+        ];
+
+        let resp = self.http_client
+            .post(&token_url)
+            .form(&params)
+            .send()
+            .await
+            .context("Failed to exchange authorization code for tokens")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            bail!("Token exchange failed (HTTP {}): {}", status, err_text);
+        }
+
+        let token_resp: TokenResponse = resp.json().await.context("Failed to parse token response")?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let expires_at = now + token_resp.expires_in.unwrap_or(3600);
+
+        let mut token_data = TokenData {
+            access_token: token_resp.access_token.clone(),
+            refresh_token: token_resp.refresh_token.clone(),
+            expires_at,
+            user_id: None,
+            user_email: None,
+            display_name: None,
+            account_type,
+        };
+
+        let jwt_candidate = token_resp.id_token.as_deref().unwrap_or(&token_resp.access_token);
+        if let Some((name, email, uid)) = parse_jwt_claims(jwt_candidate) {
+            token_data.display_name = name;
+            token_data.user_email = email;
+            token_data.user_id = uid;
+        }
+
+        Ok(token_data)
+    }
+
     #[allow(dead_code)]
     async fn fetch_user_profile(&self, access_token: &str) -> Result<GraphMeResponse> {
         let resp = self.http_client
@@ -300,4 +452,15 @@ pub fn parse_jwt_claims(token: &str) -> Option<(Option<String>, Option<String>, 
         .map(|s| s.to_string());
 
     Some((name, email, uid))
+}
+
+fn generate_pkce() -> (String, String) {
+    let mut random_bytes = [0u8; 32];
+    getrandom::getrandom(&mut random_bytes).expect("Failed to get random bytes");
+    let verifier = URL_SAFE_NO_PAD.encode(random_bytes);
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let hash = hasher.finalize();
+    let challenge = URL_SAFE_NO_PAD.encode(hash);
+    (verifier, challenge)
 }

@@ -146,12 +146,29 @@ impl CoreWorker {
     }
 
     async fn handle_login(&mut self, account_type: AccountType) {
-        let type_desc = match account_type {
-            AccountType::WorkOrSchool => "Work/School",
-            AccountType::Personal => "Personal/Teams Free",
-        };
         log::info!("Starting login flow for account type: {:?}", account_type);
 
+        if account_type == AccountType::Personal {
+            let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
+                status: "Đang mở trình duyệt để đăng nhập tài khoản cá nhân...".into(),
+                is_connected: false,
+            }).await;
+
+            let oauth = OAuthManager::default();
+            match oauth.login_interactive_loopback(account_type).await {
+                Ok(tokens) => {
+                    let _ = TokenStore::save(&tokens);
+                    self.setup_session(tokens).await;
+                }
+                Err(e) => {
+                    log::error!("Personal interactive sign-in error: {:#}", e);
+                    let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Đăng nhập thất bại: {:#}", e))).await;
+                }
+            }
+            return;
+        }
+
+        let type_desc = "Work/School";
         let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
             status: format!("Requesting {} sign-in code from Microsoft...", type_desc),
             is_connected: false,
