@@ -17,10 +17,20 @@ pub struct ConversationListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadProperties {
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(rename = "threadType", default)]
+    pub thread_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
     #[serde(default)]
     pub topic: Option<String>,
+    #[serde(rename = "threadProperties", default)]
+    pub thread_properties: Option<ThreadProperties>,
     #[serde(rename = "type", default)]
     pub conv_type: Option<String>,
     #[serde(rename = "lastMessage", default)]
@@ -49,6 +59,13 @@ impl Conversation {
         if let Some(ref t) = self.topic {
             if !t.trim().is_empty() {
                 return t.clone();
+            }
+        }
+        if let Some(ref tp) = self.thread_properties {
+            if let Some(ref t) = tp.topic {
+                if !t.trim().is_empty() {
+                    return t.clone();
+                }
             }
         }
         
@@ -93,6 +110,7 @@ pub struct ChatMessageListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
+    #[serde(default)]
     pub id: String,
     #[serde(rename = "sequenceId", default)]
     pub sequence_id: Option<i64>,
@@ -197,6 +215,7 @@ mod tests {
         let conv = Conversation {
             id: "19:abc@thread.v2".into(),
             topic: Some("Engineering Standup".into()),
+            thread_properties: None,
             conv_type: Some("chat".into()),
             last_message: None,
             members: vec![],
@@ -212,6 +231,7 @@ mod tests {
         let conv = Conversation {
             id: "19:abc@thread.v2".into(),
             topic: None,
+            thread_properties: None,
             conv_type: Some("chat".into()),
             last_message: None,
             members: vec![

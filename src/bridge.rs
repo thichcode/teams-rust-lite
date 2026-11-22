@@ -31,6 +31,7 @@ pub enum CoreEvent {
     AuthSuccess { user_name: String, email: String },
     AuthFailed(String),
     ConversationsLoaded(Vec<Conversation>),
+    ConversationSelected { conversation_id: String, title: String },
     MessagesLoaded { conversation_id: String, messages: Vec<ChatMessage> },
     NewMessageReceived(ChatMessage),
     ConnectionStatusChanged { status: String, is_connected: bool },
@@ -356,9 +357,14 @@ impl CoreWorker {
             match res {
                 Ok(new_conv) => {
                     let conv_id = new_conv.id.clone();
-                    log::info!("New conversation created: {}", conv_id);
-                    self.refresh_conversations().await;
+                    let title = new_conv.topic.clone().unwrap_or_else(|| recipient.to_string());
+                    log::info!("New conversation created: {} ({})", conv_id, title);
                     self.current_conversation_id = Some(conv_id.clone());
+                    let _ = self.tx_event.send(CoreEvent::ConversationSelected {
+                        conversation_id: conv_id.clone(),
+                        title,
+                    }).await;
+                    self.refresh_conversations().await;
                     self.load_messages_for_conversation(&conv_id).await;
                 }
                 Err(e) => {
@@ -576,6 +582,10 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
         CoreEvent::ConnectionStatusChanged { status, is_connected } => {
             win.set_connection_status(status.into());
             win.set_is_connected(is_connected);
+        }
+        CoreEvent::ConversationSelected { conversation_id, title } => {
+            win.set_active_conversation_id(conversation_id.into());
+            win.set_active_conversation_title(title.into());
         }
         CoreEvent::ConversationsLoaded(convs) => {
             let user_id = win.get_user_name().to_string();
