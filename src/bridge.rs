@@ -45,6 +45,7 @@ pub struct CoreWorker {
     tx_event: mpsc::Sender<CoreEvent>,
     token: Option<TokenData>,
     chat_client: Option<Arc<tokio::sync::Mutex<TeamsChatClient>>>,
+    conversations: Vec<Conversation>,
     current_conversation_id: Option<String>,
     latest_update_url: Option<String>,
     latest_download_url: Option<String>,
@@ -58,6 +59,7 @@ impl CoreWorker {
             tx_event,
             token: None,
             chat_client: None,
+            conversations: Vec::new(),
             current_conversation_id: None,
             latest_update_url: None,
             latest_download_url: None,
@@ -326,13 +328,14 @@ impl CoreWorker {
         });
     }
 
-    async fn refresh_conversations(&self) {
+    async fn refresh_conversations(&mut self) {
         if let Some(ref client_lock) = self.chat_client {
             let mut client = client_lock.lock().await;
             match client.get_conversations().await {
                 Ok(conversations) => {
                     let count = conversations.len();
                     log::info!("Successfully loaded {} conversations", count);
+                    self.conversations = conversations.clone();
                     let _ = self.tx_event.send(CoreEvent::ConversationsLoaded(conversations)).await;
                     let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
                         status: format!("Connected ({} chats)", count),
@@ -348,16 +351,48 @@ impl CoreWorker {
     }
 
     async fn handle_create_chat(&mut self, recipient: &str) {
-        log::info!("Handling CreateNewChat with recipient: {}", recipient);
+        let clean_recip = recipient.trim();
+        log::info!("Handling CreateNewChat with recipient: '{}'", clean_recip);
+        if clean_recip.is_empty() {
+            return;
+        }
+
+        // 1. Check if we already have an existing conversation with this recipient
+        let clean_lower = clean_recip.to_lowercase();
+        let my_uid = self.token.as_ref().and_then(|t| t.user_id.clone()).unwrap_or_default();
+
+        if let Some(existing) = self.conversations.iter().find(|c| {
+            c.id.to_lowercase() == clean_lower
+                || c.topic.as_deref().unwrap_or("").to_lowercase().contains(&clean_lower)
+                || c.thread_properties.as_ref().and_then(|tp| tp.topic.as_deref()).unwrap_or("").to_lowercase().contains(&clean_lower)
+                || c.members.iter().any(|m| {
+                    m.id.to_lowercase().contains(&clean_lower)
+                        || m.user_principal_name.as_deref().unwrap_or("").to_lowercase().contains(&clean_lower)
+                        || m.display_name.as_deref().unwrap_or("").to_lowercase().contains(&clean_lower)
+                })
+        }) {
+            let conv_id = existing.id.clone();
+            let title = existing.display_title(&my_uid);
+            log::info!("Found existing matching conversation: {} ('{}')", conv_id, title);
+            self.current_conversation_id = Some(conv_id.clone());
+            let _ = self.tx_event.send(CoreEvent::ConversationSelected {
+                conversation_id: conv_id.clone(),
+                title,
+            }).await;
+            self.load_messages_for_conversation(&conv_id).await;
+            return;
+        }
+
+        // 2. Create new conversation via chatsvc
         if let Some(ref client_lock) = self.chat_client {
             let res = {
                 let client = client_lock.lock().await;
-                client.create_conversation(recipient).await
+                client.create_conversation(clean_recip).await
             };
             match res {
                 Ok(new_conv) => {
                     let conv_id = new_conv.id.clone();
-                    let title = new_conv.topic.clone().unwrap_or_else(|| recipient.to_string());
+                    let title = new_conv.topic.clone().unwrap_or_else(|| clean_recip.to_string());
                     log::info!("New conversation created: {} ({})", conv_id, title);
                     self.current_conversation_id = Some(conv_id.clone());
                     let _ = self.tx_event.send(CoreEvent::ConversationSelected {
@@ -615,6 +650,7 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
             let user_name = win.get_user_name().to_string();
             let slint_msgs: Vec<MessageData> = messages
                 .into_iter()
+                .filter(|m| m.is_displayable())
                 .map(|m| {
                     let sender = m.im_display_name.clone().unwrap_or_else(|| "User".into());
                     let is_self = sender == user_name || m.from.as_deref().unwrap_or("").contains(&user_name);
@@ -635,25 +671,27 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
             win.set_messages(model);
         }
         CoreEvent::NewMessageReceived(m) => {
-            let user_name = win.get_user_name().to_string();
-            let sender = m.im_display_name.clone().unwrap_or_else(|| "User".into());
-            let is_self = sender == user_name || m.from.as_deref().unwrap_or("").contains(&user_name);
-            let content = m.clean_text();
-            let time = m.formatted_time();
+            if m.is_displayable() {
+                let user_name = win.get_user_name().to_string();
+                let sender = m.im_display_name.clone().unwrap_or_else(|| "User".into());
+                let is_self = sender == user_name || m.from.as_deref().unwrap_or("").contains(&user_name);
+                let content = m.clean_text();
+                let time = m.formatted_time();
 
-            let new_msg = MessageData {
-                id: m.id.into(),
-                sender_name: sender.into(),
-                content: content.into(),
-                timestamp: time.into(),
-                is_self,
-            };
+                let new_msg = MessageData {
+                    id: m.id.into(),
+                    sender_name: sender.into(),
+                    content: content.into(),
+                    timestamp: time.into(),
+                    is_self,
+                };
 
-            // Append to current messages model
-            let current_model = win.get_messages();
-            let mut list: Vec<MessageData> = current_model.iter().collect();
-            list.push(new_msg);
-            win.set_messages(ModelRc::new(VecModel::from(list)));
+                // Append to current messages model
+                let current_model = win.get_messages();
+                let mut list: Vec<MessageData> = current_model.iter().collect();
+                list.push(new_msg);
+                win.set_messages(ModelRc::new(VecModel::from(list)));
+            }
         }
         CoreEvent::ErrorOccurred(err) => {
             win.set_connection_status(format!("Error: {}", err).into());

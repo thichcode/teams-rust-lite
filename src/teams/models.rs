@@ -144,6 +144,25 @@ impl ChatMessage {
         plain.trim().to_string()
     }
 
+    /// Determines if this message should be displayed as a regular chat bubble
+    pub fn is_displayable(&self) -> bool {
+        let msg_type = self.message_type.as_deref().unwrap_or("Text");
+        
+        // System and control activity messages should not be displayed as user bubbles
+        if msg_type.starts_with("ThreadActivity/")
+            || msg_type.starts_with("Control/")
+            || msg_type.starts_with("Event/")
+            || msg_type.starts_with("Notice/")
+            || msg_type == "Typing"
+        {
+            return false;
+        }
+
+        let clean = self.clean_text();
+        // Do not display empty or whitespace-only messages
+        !clean.trim().is_empty()
+    }
+
     pub fn formatted_time(&self) -> String {
         let raw_time = self
             .compose_time
@@ -261,5 +280,64 @@ mod tests {
         assert_eq!(extract_initials("John Doe"), "JD");
         assert_eq!(extract_initials("Microsoft"), "MI");
         assert_eq!(extract_initials(""), "TU");
+    }
+
+    #[test]
+    fn test_message_is_displayable() {
+        let text_msg = ChatMessage {
+            id: "1".into(),
+            sequence_id: None,
+            conversation_id: None,
+            conversation_link: None,
+            from: None,
+            im_display_name: Some("User".into()),
+            content: Some("<p>Hello world</p>".into()),
+            message_type: Some("RichText/Html".into()),
+            compose_time: None,
+            original_arrival_time: None,
+        };
+        assert!(text_msg.is_displayable());
+
+        let system_msg1 = ChatMessage {
+            id: "2".into(),
+            sequence_id: None,
+            conversation_id: None,
+            conversation_link: None,
+            from: None,
+            im_display_name: None,
+            content: Some("17953465631988:live:.cid...".into()),
+            message_type: Some("ThreadActivity/AddMember".into()),
+            compose_time: None,
+            original_arrival_time: None,
+        };
+        assert!(!system_msg1.is_displayable());
+
+        let system_msg2 = ChatMessage {
+            id: "3".into(),
+            sequence_id: None,
+            conversation_id: None,
+            conversation_link: None,
+            from: None,
+            im_display_name: None,
+            content: Some("Topic changed".into()),
+            message_type: Some("ThreadActivity/TopicUpdate".into()),
+            compose_time: None,
+            original_arrival_time: None,
+        };
+        assert!(!system_msg2.is_displayable());
+
+        let empty_msg = ChatMessage {
+            id: "4".into(),
+            sequence_id: None,
+            conversation_id: None,
+            conversation_link: None,
+            from: None,
+            im_display_name: None,
+            content: Some("   ".into()),
+            message_type: Some("Text".into()),
+            compose_time: None,
+            original_arrival_time: None,
+        };
+        assert!(!empty_msg.is_displayable());
     }
 }
