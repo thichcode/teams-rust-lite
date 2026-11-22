@@ -12,9 +12,10 @@ use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID for Microsoft Office (supports Personal / Consumer MSA accounts)
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "d3590ed6-52b3-4102-aeff-aad2292ab01c";
-// Native client redirect URI registered for Office client on MSA
+// First-party public client ID with native loopback support on Microsoft Accounts (Consumers / Hotmail / Outlook)
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+// Fallback redirect URI
+#[allow(dead_code)]
 pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
 
 #[allow(dead_code)]
@@ -265,17 +266,16 @@ impl OAuthManager {
             .await
             .context("Failed to bind loopback TCP listener")?;
         let port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://localhost:{}", port);
 
-        let (client_id, tenant, redirect_uri) = match account_type {
+        let (client_id, tenant) = match account_type {
             AccountType::WorkOrSchool => (
                 self.get_client_id(account_type),
                 "organizations",
-                format!("http://localhost:{}", port),
             ),
             AccountType::Personal => (
                 TEAMS_PERSONAL_CLIENT_ID,
                 "consumers",
-                NATIVE_CLIENT_REDIRECT.to_string(),
             ),
         };
 
@@ -300,72 +300,18 @@ impl OAuthManager {
             challenge
         );
 
-        match account_type {
-            AccountType::WorkOrSchool => {
-                // Direct loopback: browser redirects back to http://localhost:PORT/?code=...
-                log::info!("Opening browser for Work/School loopback login on port {}", port);
-                let _ = open::that(&auth_url);
+        log::info!("Opening browser for {:?} loopback login on port {}: {}", account_type, port, auth_url);
+        let _ = open::that(&auth_url);
 
-                let timeout_duration = Duration::from_secs(300);
-                let (mut socket, _) = tokio::time::timeout(timeout_duration, listener.accept())
-                    .await
-                    .context("Timed out waiting for browser sign-in")?
-                    .context("Failed to accept connection on loopback listener")?;
+        let timeout_duration = Duration::from_secs(300);
+        let code = self.serve_personal_relay(listener, timeout_duration).await?;
 
-                let mut buf = [0u8; 4096];
-                let n = socket.read(&mut buf).await.context("Failed to read from socket")?;
-                let req_str = String::from_utf8_lossy(&buf[..n]);
-
-                let req_line = req_str.lines().next().unwrap_or_default();
-                let path = req_line.split_whitespace().nth(1).unwrap_or("/");
-
-                let full_url = format!("http://localhost{}", path);
-                let parsed_url = url::Url::parse(&full_url).context("Failed to parse callback URL")?;
-
-                let (code_opt, error_opt) = extract_code_from_url(&parsed_url);
-
-                let html_body = success_or_error_html(code_opt.is_some());
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    html_body.len(), html_body
-                );
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.shutdown().await;
-
-                if let Some(err) = error_opt {
-                    bail!("Microsoft login error: {}", err);
-                }
-
-                let code = code_opt.context("No authorization code received in callback")?;
-                log::info!("Received authorization code (len: {}). Exchanging for tokens...", code.len());
-                self.exchange_code_for_tokens(&code, client_id, tenant, &redirect_uri, &verifier, account_type).await
-            }
-            AccountType::Personal => {
-                // Personal flow: nativeclient redirect + localhost relay page
-                // 1. Serve a relay page on localhost that opens auth URL and provides paste-back UI
-                // 2. After Microsoft redirects to nativeclient?code=..., user copies URL and
-                //    pastes it, or we serve a page that auto-detects via clipboard
-                log::info!("Opening browser for Personal login with nativeclient redirect, relay on port {}", port);
-
-                // First open the auth URL directly - user logs in, gets redirected to nativeclient
-                let _ = open::that(&auth_url);
-
-                // Also open the relay page on localhost (for pasting the callback URL)
-                let relay_url = format!("http://localhost:{}/relay", port);
-                let _ = open::that(&relay_url);
-
-                let timeout_duration = Duration::from_secs(300);
-                let code = self.serve_personal_relay(listener, timeout_duration).await?;
-
-                log::info!("Received authorization code from relay (len: {}). Exchanging for tokens...", code.len());
-                self.exchange_code_for_tokens(&code, client_id, tenant, &redirect_uri, &verifier, account_type).await
-            }
-        }
+        log::info!("Received authorization code (len: {}). Exchanging for tokens...", code.len());
+        self.exchange_code_for_tokens(&code, client_id, tenant, &redirect_uri, &verifier, account_type).await
     }
 
-    /// Serves a relay page on localhost for Personal account login
-    /// The page has a text input where the user pastes the nativeclient callback URL
-    /// and auto-submits it back to localhost for code extraction
+    /// Serves loopback listener on localhost for authorization callback
+    /// Handles both direct Microsoft redirect (/?code=...) and manual paste form (/callback?code=...)
     async fn serve_personal_relay(
         &self,
         listener: tokio::net::TcpListener,
@@ -381,7 +327,7 @@ impl OAuthManager {
                     log::warn!("Relay listener accept error: {}", e);
                     continue;
                 }
-                Err(_) => bail!("Timed out waiting for Personal sign-in paste-back"),
+                Err(_) => bail!("Timed out waiting for sign-in callback"),
             };
 
             let mut buf = [0u8; 8192];
@@ -393,8 +339,8 @@ impl OAuthManager {
             let req_line = req_str.lines().next().unwrap_or_default();
             let path = req_line.split_whitespace().nth(1).unwrap_or("/");
 
-            if path.starts_with("/callback") {
-                // User submitted the nativeclient URL via the relay page form
+            if path.contains("code=") || path.starts_with("/callback") {
+                // Authorization code received directly from Microsoft or relay form
                 let full_url = format!("http://localhost{}", path);
                 if let Ok(parsed) = url::Url::parse(&full_url) {
                     let (code_opt, error_opt) = extract_code_from_url(&parsed);
@@ -415,7 +361,7 @@ impl OAuthManager {
                     }
                 }
             } else {
-                // Serve the relay page HTML
+                // Serve relay HTML page if opened directly
                 let relay_html = PERSONAL_RELAY_HTML;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
