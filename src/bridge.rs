@@ -167,26 +167,10 @@ impl CoreWorker {
 
         let oauth = OAuthManager::default();
 
-        if account_type == AccountType::Personal {
-            let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
-                status: "Đang mở trình duyệt đăng nhập Teams Free... Vui lòng đăng nhập trên trình duyệt.".into(),
-                is_connected: false,
-            }).await;
-
-            match oauth.login_interactive_loopback(account_type).await {
-                Ok(tokens) => {
-                    let _ = TokenStore::save(&tokens);
-                    self.setup_session(tokens).await;
-                }
-                Err(e) => {
-                    log::error!("Personal loopback login error: {:#}", e);
-                    let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Đăng nhập Teams Free thất bại: {:#}", e))).await;
-                }
-            }
-            return;
-        }
-
-        let type_desc = "Work/School";
+        let type_desc = match account_type {
+            AccountType::WorkOrSchool => "Work/School",
+            AccountType::Personal => "Cá nhân / Teams Free",
+        };
         let _ = self.tx_event.send(CoreEvent::ConnectionStatusChanged {
             status: format!("Đang yêu cầu mã xác thực {} từ Microsoft...", type_desc),
             is_connected: false,
