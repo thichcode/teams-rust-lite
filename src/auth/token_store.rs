@@ -6,6 +6,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SERVICE_NAME: &str = "teams-rust-lite";
 const ACCOUNT_NAME: &str = "oauth_tokens";
 
+fn get_tokens_file_path() -> std::path::PathBuf {
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        std::path::PathBuf::from(local_appdata).join("teams-rust-lite").join("session.json")
+    } else {
+        std::env::temp_dir().join("teams-rust-lite-session.json")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccountType {
     WorkOrSchool,
@@ -54,37 +62,61 @@ impl TokenStore {
     }
 
     pub fn save(tokens: &TokenData) -> Result<()> {
-        let entry = Self::get_entry()?;
         let json = serde_json::to_string(tokens)?;
-        entry
-            .set_password(&json)
-            .map_err(|e| anyhow::anyhow!("Failed to save token to keyring: {}", e))?;
+
+        // Try storing in OS keyring first
+        if let Ok(entry) = Self::get_entry() {
+            let _ = entry.set_password(&json);
+        }
+
+        // Store reliably in AppData session file as well (avoids Windows Credential Manager blob size limits)
+        let file_path = get_tokens_file_path();
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&file_path, &json)
+            .with_context(|| format!("Failed to write session file: {:?}", file_path))?;
+
+        log::info!("Session tokens successfully saved.");
         Ok(())
     }
 
     pub fn load() -> Result<Option<TokenData>> {
-        let entry = Self::get_entry()?;
-        match entry.get_password() {
-            Ok(json) => {
-                println!("Keyring get_password SUCCESS, length: {}", json.len());
-                let data: TokenData = serde_json::from_str(&json)
-                    .context("Failed to deserialize tokens from keyring")?;
-                Ok(Some(data))
-            }
-            Err(e) => {
-                println!("Keyring get_password returned: {:?}", e);
-                Ok(None)
+        // Try OS keyring first
+        if let Ok(entry) = Self::get_entry() {
+            if let Ok(json) = entry.get_password() {
+                if let Ok(data) = serde_json::from_str::<TokenData>(&json) {
+                    return Ok(Some(data));
+                }
             }
         }
+
+        // Fallback to AppData session file
+        let file_path = get_tokens_file_path();
+        if file_path.exists() {
+            if let Ok(json) = std::fs::read_to_string(&file_path) {
+                if let Ok(data) = serde_json::from_str::<TokenData>(&json) {
+                    log::info!("Loaded stored session tokens from AppData session.json");
+                    return Ok(Some(data));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn clear() -> Result<()> {
-        let entry = Self::get_entry()?;
-        match entry.delete_credential() {
-            Ok(_) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(anyhow::anyhow!("Failed to delete token from keyring: {}", e)),
+        if let Ok(entry) = Self::get_entry() {
+            let _ = entry.delete_credential();
         }
+
+        let file_path = get_tokens_file_path();
+        if file_path.exists() {
+            let _ = std::fs::remove_file(file_path);
+        }
+
+        log::info!("Session tokens cleared.");
+        Ok(())
     }
 }
 

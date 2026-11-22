@@ -9,10 +9,11 @@ use crate::auth::AccountType;
 use super::models::{ChatMessage, ChatMessageListResponse, Conversation, ConversationListResponse, SendMessageRequest};
 
 pub const DEFAULT_CHATSVC_URL: &str = "https://chatsvcagg.teams.microsoft.com";
-pub const DEFAULT_AUTHSVC_URL: &str = "https://authsvc.teams.microsoft.com/v1.0/authz";
+pub const DEFAULT_AUTHSVC_URL: &str = "https://teams.microsoft.com/api/authsvc/v1.0/authz";
+pub const FALLBACK_AUTHSVC_URL: &str = "https://authsvc.teams.microsoft.com/v1.0/authz";
 
-pub const TEAMS_LIVE_CHATSVC_URL: &str = "https://teams.live.com/api/csa/api";
-pub const TEAMS_LIVE_AUTHSVC_URL: &str = "https://teams.live.com/api/authsvc/v1.0/authz";
+pub const TEAMS_LIVE_CHATSVC_URL: &str = "https://teams.live.com/api/chatsvc/consumer";
+pub const TEAMS_LIVE_AUTHSVC_URL: &str = "https://teams.live.com/api/auth/v1.0/authz/consumer";
 
 pub struct TeamsChatClient {
     base_url: String,
@@ -71,56 +72,99 @@ impl TeamsChatClient {
 
     /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
     pub async fn exchange_skype_token(&mut self) -> Result<String> {
-        let authsvc_url = DEFAULT_AUTHSVC_URL;
-        log::info!("Calling authsvc token exchange at {} for {:?}", authsvc_url, self.account_type);
-
-        let resp = self.http_client
-            .post(authsvc_url)
-            .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
-            .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .context("Failed to connect to Teams authsvc")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err_body = resp.text().await.unwrap_or_default();
-            log::error!("authsvc token exchange failed (HTTP {}): {}", status, err_body);
-            bail!("authsvc token exchange failed (HTTP {}): {}", status, err_body);
-        }
-
-        let body: serde_json::Value = resp.json().await.context("Failed to parse authsvc response")?;
-        
-        // Extract skypeToken from tokens object or root
-        let token_opt = body.get("tokens")
-            .and_then(|t| t.get("skypeToken"))
-            .and_then(|s| s.as_str())
-            .or_else(|| body.get("skypeToken").and_then(|s| s.as_str()))
-            .map(|s| s.to_string());
-
-        let skype_token = match token_opt {
-            Some(tok) => tok,
-            None => bail!("authsvc response did not contain a skypeToken: {}", body),
+        let candidates: Vec<(&str, &str)> = match self.account_type {
+            AccountType::Personal => vec![
+                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
+                (DEFAULT_AUTHSVC_URL, "POST"),
+                (DEFAULT_AUTHSVC_URL, "GET"),
+                (FALLBACK_AUTHSVC_URL, "POST"),
+            ],
+            AccountType::WorkOrSchool => vec![
+                (DEFAULT_AUTHSVC_URL, "POST"),
+                (DEFAULT_AUTHSVC_URL, "GET"),
+                (FALLBACK_AUTHSVC_URL, "POST"),
+                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+            ],
         };
 
-        log::info!("Successfully acquired SkypeToken from authsvc (len: {})", skype_token.len());
-        self.skype_token = Some(skype_token.clone());
+        let mut last_err = String::new();
+        for (auth_url, method) in candidates {
+            log::info!("Attempting authsvc token exchange via {} {} for {:?}", method, auth_url, self.account_type);
 
-        // Extract regional chatService URL if provided by authsvc
-        let chat_svc_url = body.get("chatServiceUri")
-            .and_then(|v| v.as_str())
-            .or_else(|| body.get("chatService").and_then(|v| v.as_str()))
-            .or_else(|| body.get("services").and_then(|s| s.get("chatService")).and_then(|v| v.as_str()))
-            .or_else(|| body.get("services").and_then(|s| s.get("chatServiceUri")).and_then(|v| v.as_str()));
+            let req_builder = if method == "POST" {
+                self.http_client
+                    .post(auth_url)
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&serde_json::json!({}))
+            } else {
+                self.http_client.get(auth_url)
+            };
 
-        if let Some(endpoint) = chat_svc_url {
-            let clean_endpoint = endpoint.trim_end_matches('/').to_string();
-            log::info!("Updating chatsvc base_url to regional endpoint from authsvc: {}", clean_endpoint);
-            self.base_url = clean_endpoint;
+            let req_builder = req_builder
+                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                .header("Accept", "application/json");
+
+            match req_builder.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        match resp.json::<serde_json::Value>().await {
+                            Ok(body) => {
+                                // Extract skypeToken
+                                let token_opt = body.get("tokens")
+                                    .and_then(|t| t.get("skypeToken"))
+                                    .and_then(|s| s.as_str())
+                                    .or_else(|| body.get("skypeToken").and_then(|s| s.as_str()))
+                                    .or_else(|| body.get("tokens").and_then(|t| t.get("token")).and_then(|s| s.as_str()))
+                                    .or_else(|| body.get("token").and_then(|s| s.as_str()))
+                                    .or_else(|| body.get("tokens").and_then(|t| t.get("skype_token")).and_then(|s| s.as_str()))
+                                    .map(|s| s.to_string());
+
+                                if let Some(skype_tok) = token_opt {
+                                    log::info!("Successfully acquired SkypeToken from {} (len: {})", auth_url, skype_tok.len());
+                                    self.skype_token = Some(skype_tok.clone());
+
+                                    // Extract regional chatService URL if provided by authsvc
+                                    let chat_svc_url = body.get("chatServiceUri")
+                                        .and_then(|v| v.as_str())
+                                        .or_else(|| body.get("chatService").and_then(|v| v.as_str()))
+                                        .or_else(|| body.get("tokens").and_then(|t| t.get("chatService")).and_then(|v| v.as_str()))
+                                        .or_else(|| body.get("tokens").and_then(|t| t.get("chatServiceUri")).and_then(|v| v.as_str()))
+                                        .or_else(|| body.get("services").and_then(|s| s.get("chatService")).and_then(|v| v.as_str()))
+                                        .or_else(|| body.get("services").and_then(|s| s.get("chatServiceUri")).and_then(|v| v.as_str()));
+
+                                    if let Some(endpoint) = chat_svc_url {
+                                        let clean_endpoint = endpoint.trim_end_matches('/').to_string();
+                                        log::info!("Updating chatsvc base_url to regional endpoint from authsvc: {}", clean_endpoint);
+                                        self.base_url = clean_endpoint;
+                                    }
+
+                                    return Ok(skype_tok);
+                                } else {
+                                    log::warn!("authsvc response from {} did not contain skypeToken: {}", auth_url, body);
+                                    last_err = format!("Missing skypeToken from {}: {}", auth_url, body);
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to parse JSON response from {}: {}", auth_url, e);
+                                last_err = format!("Failed to parse JSON from {}: {}", auth_url, e);
+                            }
+                        }
+                    } else {
+                        let err_text = resp.text().await.unwrap_or_default();
+                        log::warn!("authsvc {} returned HTTP {}: {}", auth_url, status, err_text);
+                        last_err = format!("HTTP {} from {}: {}", status, auth_url, err_text);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to send request to {}: {}", auth_url, e);
+                    last_err = format!("Connection error to {}: {}", auth_url, e);
+                }
+            }
         }
 
-        Ok(skype_token)
+        bail!("All authsvc endpoints failed to exchange token. Last error: {}", last_err);
     }
 
     pub fn get_active_token(&self) -> String {
@@ -129,17 +173,21 @@ impl TeamsChatClient {
 
     /// Prepares request builder with required Teams authentication headers
     fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        req = req.header(AUTHORIZATION, format!("Bearer {}", self.access_token));
         if let Some(ref skype_tok) = self.skype_token {
             req = req
-                .header("x-skypetoken", skype_tok.as_str())
-                .header("Authentication", format!("skypetoken_asm {}", skype_tok));
+                .header(AUTHORIZATION, format!("skypetoken={}", skype_tok))
+                .header("Authentication", format!("skypetoken_asm {}", skype_tok))
+                .header("x-skypetoken", skype_tok.as_str());
         } else {
-            req = req.header("Authentication", format!("Bearer {}", self.access_token));
+            req = req
+                .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
+                .header("Authentication", format!("Bearer {}", self.access_token));
         }
+
         if self.account_type == AccountType::Personal {
             req = req.header("x-csendpoint", "https://msgapi.teams.live.com/");
         }
+        req = req.header("BehaviorOverride", "redirectAs404");
         req
     }
 
