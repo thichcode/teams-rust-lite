@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     let initial_is_dark = solar::should_be_dark_theme(solar::ThemeMode::AutoSolar);
     main_window.set_is_dark_theme(initial_is_dark);
     main_window.set_theme_mode_icon(solar::ThemeMode::AutoSolar.icon().into());
+    main_window.set_theme_status_text("Auto".into());
 
     // Hook up Theme Mode toggle callback
     let weak_theme_win = main_window.as_weak();
@@ -40,10 +41,16 @@ async fn main() -> Result<()> {
             *mode = mode.next();
             let is_dark = solar::should_be_dark_theme(*mode);
             let icon = mode.icon();
+            let label = match *mode {
+                solar::ThemeMode::AutoSolar => "Auto",
+                solar::ThemeMode::ForceLight => "Sáng",
+                solar::ThemeMode::ForceDark => "Tối",
+            };
             log::info!("Switched theme mode to: {:?} (is_dark: {})", *mode, is_dark);
             if let Some(win) = weak_theme_win.upgrade() {
                 win.set_is_dark_theme(is_dark);
                 win.set_theme_mode_icon(icon.into());
+                win.set_theme_status_text(label.into());
             }
         }
     });

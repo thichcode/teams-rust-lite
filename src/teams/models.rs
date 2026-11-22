@@ -31,6 +31,19 @@ pub struct Conversation {
     pub last_join_timestamp: Option<i64>,
 }
 
+pub fn extract_initials(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if words.is_empty() {
+        "TU".to_string()
+    } else if words.len() == 1 {
+        words[0].chars().take(2).collect::<String>().to_uppercase()
+    } else {
+        let first = words[0].chars().next().unwrap_or(' ');
+        let last = words[words.len() - 1].chars().next().unwrap_or(' ');
+        format!("{}{}", first, last).to_uppercase()
+    }
+}
+
 impl Conversation {
     pub fn display_title(&self, current_user_id: &str) -> String {
         if let Some(ref t) = self.topic {
@@ -57,17 +70,7 @@ impl Conversation {
     }
 
     pub fn initials(&self, current_user_id: &str) -> String {
-        let title = self.display_title(current_user_id);
-        let words: Vec<&str> = title.split_whitespace().collect();
-        if words.is_empty() {
-            "T".to_string()
-        } else if words.len() == 1 {
-            words[0].chars().take(2).collect::<String>().to_uppercase()
-        } else {
-            let first = words[0].chars().next().unwrap_or(' ');
-            let second = words[1].chars().next().unwrap_or(' ');
-            format!("{}{}", first, second).to_uppercase()
-        }
+        extract_initials(&self.display_title(current_user_id))
     }
 }
 
@@ -230,5 +233,13 @@ mod tests {
 
         assert_eq!(conv.display_title("user_me"), "Bob Smith");
         assert_eq!(conv.initials("user_me"), "BS");
+    }
+
+    #[test]
+    fn test_extract_initials() {
+        assert_eq!(extract_initials("Thưởng Đinh"), "TĐ");
+        assert_eq!(extract_initials("John Doe"), "JD");
+        assert_eq!(extract_initials("Microsoft"), "MI");
+        assert_eq!(extract_initials(""), "TU");
     }
 }

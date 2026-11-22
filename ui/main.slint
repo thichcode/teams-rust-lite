@@ -37,8 +37,12 @@ export component MainWindow inherits Window {
     in property <string> login-verification-url: "https://www.microsoft.com/link";
 
     in property <string> user-name: "Teams User";
+    in property <string> user-initials: "TU";
     in property <string> connection-status: "Connecting...";
     in property <bool> is-connected: true;
+
+    in-out property <bool> is-creating-chat: false;
+    in-out property <string> new-chat-recipient: "";
 
     in property <[ConversationData]> conversations: [];
     in property <string> active-conversation-id: "";
@@ -52,7 +56,7 @@ export component MainWindow inherits Window {
     in property <string> update-info-text: "";
 
     in-out property <bool> is-dark-theme: false;
-    in-out property <string> theme-mode-icon: "🔄";
+    in-out property <string> theme-mode-icon: "🌓";
     in-out property <string> theme-status-text: "Auto (Solar)";
 
     callback start-login-work();
@@ -62,6 +66,7 @@ export component MainWindow inherits Window {
     callback select-conversation(string);
     callback send-message(string);
     callback trigger-refresh();
+    callback start-new-chat(string);
     callback check-for-updates();
     callback open-update-url();
     callback install-update();
@@ -91,7 +96,7 @@ export component MainWindow inherits Window {
     if is-logged-in: HorizontalLayout {
         // Left Sidebar: Conversations
         Rectangle {
-            width: 320px;
+            width: 340px;
             background: root.is-dark-theme ? #252528 : #f7f7f9;
             border-width: 1px;
             border-color: root.is-dark-theme ? #333338 : #e5e5ea;
@@ -99,40 +104,42 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 // Header / Profile Bar
                 Rectangle {
-                    height: 56px;
+                    height: 60px;
                     background: root.is-dark-theme ? #444791 : #5b5fc7;
 
                     HorizontalLayout {
-                        padding-left: 16px;
-                        padding-right: 16px;
-                        spacing: 10px;
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 12px;
                         alignment: center;
 
+                        // Avatar with real initials
                         Rectangle {
-                            width: 32px;
-                            height: 32px;
-                            border-radius: 16px;
+                            width: 38px;
+                            height: 38px;
+                            border-radius: 19px;
                             background: #ffffff;
 
                             Text {
-                                text: "T";
+                                text: root.user-initials;
                                 color: #5b5fc7;
                                 font-weight: 800;
-                                font-size: 16px;
+                                font-size: 14px;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
                         }
 
+                        // User Name & Connection Status
                         VerticalLayout {
                             alignment: center;
-                            spacing: 1px;
+                            spacing: 2px;
                             horizontal-stretch: 1;
 
                             Text {
                                 text: root.user-name;
                                 color: #ffffff;
-                                font-size: 13px;
+                                font-size: 14px;
                                 font-weight: 700;
                                 overflow: elide;
                             }
@@ -140,103 +147,24 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.connection-status;
                                 color: root.is-connected ? #c8ffc8 : #ffd0d0;
-                                font-size: 10px;
+                                font-size: 11px;
                                 overflow: elide;
                             }
                         }
 
-                        // Theme Mode Switcher
-                        touch-main-theme := TouchArea {
-                            width: 28px;
-                            height: 28px;
-                            clicked => { root.toggle-theme-mode(); }
+                        // New Conversation button
+                        touch-new-chat := TouchArea {
+                            width: 34px;
+                            height: 34px;
+                            clicked => {
+                                root.is-creating-chat = !root.is-creating-chat;
+                            }
                             Rectangle {
-                                border-radius: 4px;
-                                background: touch-main-theme.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
+                                border-radius: 6px;
+                                background: touch-new-chat.has-hover ? (root.is-dark-theme ? #5a5db8 : #6f73db) : (root.is-dark-theme ? #373a78 : #4a4eb2);
                                 Text {
-                                    text: root.theme-mode-icon;
+                                    text: "✏️";
                                     font-size: 16px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // Refresh button
-                        touch-main-refresh := TouchArea {
-                            width: 28px;
-                            height: 28px;
-                            clicked => { root.trigger-refresh(); }
-                            Rectangle {
-                                border-radius: 4px;
-                                background: touch-main-refresh.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
-                                Text {
-                                    text: "🔄";
-                                    font-size: 14px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // Update Check button
-                        touch-main-update := TouchArea {
-                            height: 28px;
-                            clicked => { root.check-for-updates(); }
-                            Rectangle {
-                                border-radius: 4px;
-                                background: touch-main-update.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : (root.is-update-available ? #7d6608 : transparent);
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    spacing: 4px;
-                                    alignment: center;
-
-                                    Text {
-                                        text: "⚡";
-                                        font-size: 14px;
-                                        vertical-alignment: center;
-                                    }
-
-                                    if root.is-update-available: Text {
-                                        text: "Update";
-                                        color: #ffd700;
-                                        font-size: 11px;
-                                        font-weight: 700;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Open Logs button
-                        touch-main-log := TouchArea {
-                            width: 28px;
-                            height: 28px;
-                            clicked => { root.open-logs(); }
-                            Rectangle {
-                                border-radius: 4px;
-                                background: touch-main-log.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
-                                Text {
-                                    text: "📄";
-                                    font-size: 14px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // Logout button
-                        touch-main-logout := TouchArea {
-                            width: 28px;
-                            height: 28px;
-                            clicked => { root.logout(); }
-                            Rectangle {
-                                border-radius: 4px;
-                                background: touch-main-logout.has-hover ? (root.is-dark-theme ? #5558a0 : #4d51ab) : transparent;
-                                Text {
-                                    text: "🚪";
-                                    font-size: 14px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -245,15 +173,93 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // Search or Filter bar
+                // Inline New Chat Box (when is-creating-chat is active)
+                if root.is-creating-chat: Rectangle {
+                    background: root.is-dark-theme ? #2d2e35 : #f0f1f5;
+                    border-width: 1px;
+                    border-color: root.is-dark-theme ? #3e404b : #d8dae2;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Tới:";
+                                color: root.is-dark-theme ? #ffffff : #242424;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            recipient-input := LineEdit {
+                                placeholder-text: "Email hoặc Skype ID...";
+                                text <=> root.new-chat-recipient;
+                                accepted => {
+                                    if (self.text != "") {
+                                        root.start-new-chat(self.text);
+                                        root.is-creating-chat = false;
+                                        root.new-chat-recipient = "";
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+
+                            Button {
+                                text: "Bắt đầu Chat";
+                                primary: true;
+                                clicked => {
+                                    if (recipient-input.text != "") {
+                                        root.start-new-chat(recipient-input.text);
+                                        root.is-creating-chat = false;
+                                        root.new-chat-recipient = "";
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "Huỷ";
+                                clicked => {
+                                    root.is-creating-chat = false;
+                                    root.new-chat-recipient = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Search & Refresh bar
                 HorizontalLayout {
                     padding-left: 12px;
                     padding-right: 12px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 8px;
 
                     search-input := LineEdit {
                         placeholder-text: "Search chats...";
+                        horizontal-stretch: 1;
+                    }
+
+                    // Refresh Button
+                    touch-main-refresh := TouchArea {
+                        width: 32px;
+                        height: 32px;
+                        clicked => { root.trigger-refresh(); }
+                        Rectangle {
+                            border-radius: 4px;
+                            background: touch-main-refresh.has-hover ? (root.is-dark-theme ? #3b3d45 : #e2e4ea) : transparent;
+                            Text {
+                                text: "🔄";
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
 
@@ -322,11 +328,131 @@ export component MainWindow inherits Window {
                             }
 
                             Text {
-                                text: "Tin nhắn mới sẽ tự động xuất hiện tại đây khi có người liên hệ.";
+                                text: "Nhấn ✏️ ở trên để bắt đầu nhắn tin với đồng nghiệp hoặc bạn bè.";
                                 color: root.is-dark-theme ? #787c94 : #8a8fa8;
                                 font-size: 11px;
                                 wrap: word-wrap;
                                 horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Bottom Utility Toolbar
+                Rectangle {
+                    height: 42px;
+                    background: root.is-dark-theme ? #1e1e22 : #ebecef;
+                    border-width: 1px;
+                    border-color: root.is-dark-theme ? #333338 : #dddddf;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        alignment: space-between;
+
+                        // Left group: Theme & Logs
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            // Theme Switcher
+                            touch-main-theme := TouchArea {
+                                height: 30px;
+                                clicked => { root.toggle-theme-mode(); }
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: touch-main-theme.has-hover ? (root.is-dark-theme ? #333338 : #dddddf) : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        spacing: 4px;
+                                        alignment: center;
+
+                                        Text {
+                                            text: root.theme-mode-icon;
+                                            font-size: 14px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: root.theme-status-text;
+                                            color: root.is-dark-theme ? #b0b4c8 : #5a5f78;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Logs Button
+                            touch-main-log := TouchArea {
+                                width: 30px;
+                                height: 30px;
+                                clicked => { root.open-logs(); }
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: touch-main-log.has-hover ? (root.is-dark-theme ? #333338 : #dddddf) : transparent;
+                                    Text {
+                                        text: "📄";
+                                        font-size: 14px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Right group: Update & Logout
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: end;
+
+                            // Update Check Button
+                            touch-main-update := TouchArea {
+                                height: 30px;
+                                clicked => { root.check-for-updates(); }
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: touch-main-update.has-hover ? (root.is-dark-theme ? #333338 : #dddddf) : (root.is-update-available ? #7d6608 : transparent);
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        spacing: 4px;
+                                        alignment: center;
+
+                                        Text {
+                                            text: "⚡";
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if root.is-update-available: Text {
+                                            text: "Update";
+                                            color: #ffd700;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Logout Button
+                            touch-main-logout := TouchArea {
+                                width: 30px;
+                                height: 30px;
+                                clicked => { root.logout(); }
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: touch-main-logout.has-hover ? (root.is-dark-theme ? #5a2e2e : #ffd8d8) : transparent;
+                                    Text {
+                                        text: "🚪";
+                                        font-size: 14px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
                             }
                         }
                     }

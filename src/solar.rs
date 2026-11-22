@@ -32,7 +32,7 @@ impl ThemeMode {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            ThemeMode::AutoSolar => "🔄",
+            ThemeMode::AutoSolar => "🌓",
             ThemeMode::ForceLight => "☀️",
             ThemeMode::ForceDark => "🌙",
         }

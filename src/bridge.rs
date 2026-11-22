@@ -15,6 +15,7 @@ pub enum UiCommand {
     OpenBrowserLogin,
     Logout,
     RefreshConversations,
+    CreateNewChat(String),
     SelectConversation(String),
     SendMessage { conversation_id: String, text: String },
     CheckForUpdates,
@@ -104,6 +105,9 @@ impl CoreWorker {
                 }
                 UiCommand::RefreshConversations => {
                     self.refresh_conversations().await;
+                }
+                UiCommand::CreateNewChat(recipient) => {
+                    self.handle_create_chat(&recipient).await;
                 }
                 UiCommand::SelectConversation(conv_id) => {
                     self.current_conversation_id = Some(conv_id.clone());
@@ -342,6 +346,29 @@ impl CoreWorker {
         }
     }
 
+    async fn handle_create_chat(&mut self, recipient: &str) {
+        log::info!("Handling CreateNewChat with recipient: {}", recipient);
+        if let Some(ref client_lock) = self.chat_client {
+            let res = {
+                let client = client_lock.lock().await;
+                client.create_conversation(recipient).await
+            };
+            match res {
+                Ok(new_conv) => {
+                    let conv_id = new_conv.id.clone();
+                    log::info!("New conversation created: {}", conv_id);
+                    self.refresh_conversations().await;
+                    self.current_conversation_id = Some(conv_id.clone());
+                    self.load_messages_for_conversation(&conv_id).await;
+                }
+                Err(e) => {
+                    log::error!("Failed to create conversation: {}", e);
+                    let _ = self.tx_event.send(CoreEvent::ErrorOccurred(format!("Không thể tạo chat: {}", e))).await;
+                }
+            }
+        }
+    }
+
     async fn load_messages_for_conversation(&self, conv_id: &str) {
         if let Some(ref client_lock) = self.chat_client {
             let client = client_lock.lock().await;
@@ -430,6 +457,15 @@ pub fn attach_ui_bridge(
         let tx = tx_refresh.clone();
         tokio::spawn(async move {
             let _ = tx.send(UiCommand::RefreshConversations).await;
+        });
+    });
+
+    let tx_new_chat = tx_cmd.clone();
+    window.on_start_new_chat(move |recip| {
+        let tx = tx_new_chat.clone();
+        let recip_str = recip.to_string();
+        tokio::spawn(async move {
+            let _ = tx.send(UiCommand::CreateNewChat(recip_str)).await;
         });
     });
 
@@ -524,6 +560,8 @@ fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
             win.set_is_authenticating(true);
         }
         CoreEvent::AuthSuccess { user_name, .. } => {
+            let initials = crate::teams::models::extract_initials(&user_name);
+            win.set_user_initials(initials.into());
             win.set_login_user_code("".into());
             win.set_is_logged_in(true);
             win.set_is_authenticating(false);

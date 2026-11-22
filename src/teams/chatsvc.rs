@@ -274,6 +274,70 @@ impl TeamsChatClient {
         Ok(body.conversations)
     }
 
+    /// Creates a new 1:1 conversation with a recipient (email or Skype/Teams ID)
+    pub async fn create_conversation(&self, recipient: &str) -> Result<Conversation> {
+        let clean_recip = recipient.trim();
+        if clean_recip.is_empty() {
+            bail!("Recipient cannot be empty");
+        }
+
+        let member_id = if clean_recip.starts_with("8:") || clean_recip.starts_with("19:") {
+            clean_recip.to_string()
+        } else if clean_recip.contains('@') {
+            match self.account_type {
+                AccountType::Personal => format!("8:live:{}", clean_recip),
+                AccountType::WorkOrSchool => format!("8:orgid:{}", clean_recip),
+            }
+        } else {
+            format!("8:{}", clean_recip)
+        };
+
+        let url = format!("{}/v1/users/ME/conversations", self.base_url);
+        log::info!("Creating new conversation at {} with member {}", url, member_id);
+
+        let payload = serde_json::json!({
+            "members": [
+                {
+                    "id": member_id,
+                    "role": "User"
+                }
+            ]
+        });
+
+        let req = self.http_client.post(&url).json(&payload);
+        let resp = self.apply_auth(req)
+            .send()
+            .await
+            .context("Failed to send create_conversation request")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            log::warn!("chatsvc create_conversation error (HTTP {}): {}", status, err_body);
+            if member_id.starts_with("8:live:") {
+                let direct_id = format!("8:{}", clean_recip);
+                log::info!("Retrying create_conversation with direct member ID: {}", direct_id);
+                let retry_payload = serde_json::json!({
+                    "members": [{ "id": direct_id, "role": "User" }]
+                });
+                let retry_req = self.http_client.post(&url).json(&retry_payload);
+                if let Ok(retry_resp) = self.apply_auth(retry_req).send().await {
+                    if retry_resp.status().is_success() {
+                        if let Ok(conv) = retry_resp.json::<Conversation>().await {
+                            log::info!("Successfully created conversation: {}", conv.id);
+                            return Ok(conv);
+                        }
+                    }
+                }
+            }
+            bail!("chatsvc create_conversation failed (HTTP {}): {}", status, err_body);
+        }
+
+        let conv: Conversation = resp.json().await.context("Failed to parse created conversation JSON")?;
+        log::info!("Successfully created conversation: {}", conv.id);
+        Ok(conv)
+    }
+
     /// Fetches chat message history for a specific conversation
     pub async fn get_messages(&self, conversation_id: &str, page_size: usize) -> Result<Vec<ChatMessage>> {
         let url = format!(
