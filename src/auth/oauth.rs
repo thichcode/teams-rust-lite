@@ -77,7 +77,7 @@ impl OAuthManager {
     pub async fn request_device_code(&self, account_type: AccountType) -> Result<DeviceCodeResponse> {
         let tenant = match account_type {
             AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "consumers",
+            AccountType::Personal => "common",
         };
         let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode", tenant);
         log::info!("Requesting device code from {} for {:?}", url, account_type);
@@ -113,7 +113,7 @@ impl OAuthManager {
     ) -> Result<TokenData> {
         let tenant = match account_type {
             AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "consumers",
+            AccountType::Personal => "common",
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Polling token endpoint at {} for {:?}", token_url, account_type);
@@ -197,7 +197,7 @@ impl OAuthManager {
     pub async fn refresh_token(&self, refresh_token: &str, account_type: AccountType) -> Result<TokenData> {
         let tenant = match account_type {
             AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "consumers",
+            AccountType::Personal => "common",
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Refreshing token at {} for {:?}", token_url, account_type);
