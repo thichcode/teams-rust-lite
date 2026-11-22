@@ -10,10 +10,10 @@ use tokio::time::sleep;
 
 use super::token_store::{AccountType, TokenData};
 
-// Standard public client ID for Microsoft Teams for Work/School
+// Standard public client ID for Microsoft Teams (supports both Work/School and Personal accounts)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID for Microsoft Office (supports Personal / Consumer accounts)
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "d3590ed6-52b3-4102-aeff-aad2292ab01c";
+// First-party public client ID for Microsoft Teams Free / Personal accounts
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
 
 #[allow(dead_code)]
 pub const DEFAULT_CLIENT_ID: &str = TEAMS_WORK_CLIENT_ID;
@@ -266,7 +266,7 @@ impl OAuthManager {
 
         let (client_id, tenant) = match account_type {
             AccountType::WorkOrSchool => (self.get_client_id(account_type), "organizations"),
-            AccountType::Personal => (TEAMS_PERSONAL_CLIENT_ID, "consumers"),
+            AccountType::Personal => (TEAMS_PERSONAL_CLIENT_ID, "common"),
         };
 
         let (verifier, challenge) = generate_pkce();

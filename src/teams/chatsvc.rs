@@ -157,26 +157,30 @@ impl TeamsChatClient {
         let status = resp.status();
         log::info!("chatsvc get_conversations response HTTP {}", status);
 
-        // If unauthorized on enterprise endpoint, try fallback to Teams Personal (teams.live.com)
-        if (status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN)
-            && self.account_type == AccountType::WorkOrSchool
+        // If unauthorized or not found, try fallback to alternative endpoint (enterprise <-> personal)
+        if status == reqwest::StatusCode::UNAUTHORIZED 
+            || status == reqwest::StatusCode::FORBIDDEN 
+            || status == reqwest::StatusCode::NOT_FOUND 
         {
-            log::warn!("chatsvc returned HTTP {} on enterprise endpoint. Attempting fallback to Teams Live (Personal)...", status);
-            self.account_type = AccountType::Personal;
-            self.base_url = TEAMS_LIVE_CHATSVC_URL.trim_end_matches('/').to_string();
+            let fallback_url = if self.base_url.contains("teams.live.com") {
+                DEFAULT_CHATSVC_URL
+            } else {
+                TEAMS_LIVE_CHATSVC_URL
+            };
 
-            // Try to re-exchange skype token for personal endpoint if needed
-            let _ = self.exchange_skype_token().await;
+            log::warn!("chatsvc returned HTTP {} on {}. Attempting fallback to alternative endpoint: {}...", status, self.base_url, fallback_url);
+            self.base_url = fallback_url.trim_end_matches('/').to_string();
 
-            let live_url = format!("{}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=50", self.base_url);
-            log::info!("Retrying conversations on personal endpoint: {}", live_url);
-            let retry_req = self.http_client.get(&live_url);
-            let retry_resp = self.apply_auth(retry_req).send().await.context("Failed to retry get_conversations on personal endpoint")?;
-            
-            if retry_resp.status().is_success() {
-                let body: ConversationListResponse = retry_resp.json().await.context("Failed to parse conversations JSON")?;
-                log::info!("Successfully parsed {} conversations from personal endpoint", body.conversations.len());
-                return Ok(body.conversations);
+            let retry_url = format!("{}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=50", self.base_url);
+            log::info!("Retrying conversations on alternative endpoint: {}", retry_url);
+            let retry_req = self.http_client.get(&retry_url);
+            if let Ok(retry_resp) = self.apply_auth(retry_req).send().await {
+                if retry_resp.status().is_success() {
+                    if let Ok(body) = retry_resp.json::<ConversationListResponse>().await {
+                        log::info!("Successfully parsed {} conversations from fallback endpoint", body.conversations.len());
+                        return Ok(body.conversations);
+                    }
+                }
             }
         }
 
