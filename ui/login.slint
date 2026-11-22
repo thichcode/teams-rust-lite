@@ -241,25 +241,78 @@ export component LoginView inherits Rectangle {
                             }
 
                             VerticalLayout {
-                                spacing: 10px;
+                                spacing: 12px;
 
-                                Button {
-                                    text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "🏢 Đăng nhập Tài khoản Công ty / Doanh nghiệp";
+                                // Work / School Account Button
+                                touch-work := TouchArea {
+                                    height: 42px;
                                     enabled: !root.is-loading;
-                                    primary: true;
+                                    mouse-cursor: root.is-loading ? default : pointer;
                                     clicked => { root.start-login-work(); }
+
+                                    Rectangle {
+                                        border-radius: 8px;
+                                        background: root.is-loading ? #7bb1dd : (touch-work.has-hover ? #0060aa : #0078d4);
+
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: 8px;
+
+                                            Text {
+                                                text: "🏢";
+                                                font-size: 15px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "Đăng nhập Tài khoản Công ty / Doanh nghiệp";
+                                                color: #ffffff;
+                                                font-size: 13px;
+                                                font-weight: 600;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
                                 }
 
-                                Button {
-                                    text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "👤 Đăng nhập Tài khoản Cá nhân / Teams Free";
+                                // Personal / Teams Free Account Button
+                                touch-personal := TouchArea {
+                                    height: 42px;
                                     enabled: !root.is-loading;
+                                    mouse-cursor: root.is-loading ? default : pointer;
                                     clicked => { root.start-login-personal(); }
+
+                                    Rectangle {
+                                        border-radius: 8px;
+                                        background: touch-personal.has-hover ? (root.is-dark-theme ? #3b3b42 : #edf4fb) : (root.is-dark-theme ? #2d2d32 : #ffffff);
+                                        border-width: 1.5px;
+                                        border-color: root.is-dark-theme ? #5a5a64 : #0078d4;
+
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: 8px;
+
+                                            Text {
+                                                text: "👤";
+                                                font-size: 15px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: root.is-loading ? "Đang yêu cầu đăng nhập..." : "Đăng nhập Tài khoản Cá nhân / Teams Free";
+                                                color: root.is-dark-theme ? #ffffff : #0078d4;
+                                                font-size: 13px;
+                                                font-weight: 600;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
                                 }
 
                                 Text {
                                     text: "🏢 Công ty: Microsoft 365, M365  •  👤 Cá nhân: Gmail, Outlook, số điện thoại";
                                     font-size: 11px;
-                                    color: root.is-dark-theme ? #888888 : #777777;
+                                    color: root.is-dark-theme ? #999999 : #666666;
                                     horizontal-alignment: center;
                                     wrap: word-wrap;
                                 }
