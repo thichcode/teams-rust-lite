@@ -50,17 +50,19 @@ impl TrouterClient {
 
     /// Connects to Trouter WebSocket and maintains heartbeat & auto-reconnect
     pub async fn run_loop(self) {
-        let mut backoff_secs = 1u64;
+        let mut backoff_secs = 5u64;
 
         while self.is_running.load(Ordering::Relaxed) {
             log::info!("Connecting to Trouter WebSocket at: {}", self.ws_url);
             
-            // Build WebSocket URL with query parameters
+            // Build WebSocket URL: Skype Trouter authenticates via frame, not query param
             let connect_url_result = Url::parse(&self.ws_url).and_then(|mut u| {
-                u.query_pairs_mut()
-                    .append_pair("auth", &self.token)
-                    .append_pair("clientver", "1.0")
-                    .append_pair("transport", "websocket");
+                if !self.ws_url.contains("trouter.skype.com") {
+                    u.query_pairs_mut()
+                        .append_pair("auth", &self.token)
+                        .append_pair("clientver", "1.0")
+                        .append_pair("transport", "websocket");
+                }
                 Ok(u)
             });
 
@@ -68,26 +70,24 @@ impl TrouterClient {
                 Ok(u) => u.to_string(),
                 Err(e) => {
                     log::error!("Invalid Trouter URL: {}", e);
-                    sleep(Duration::from_secs(5)).await;
+                    sleep(Duration::from_secs(10)).await;
                     continue;
                 }
             };
 
             match connect_async(&connect_url).await {
                 Ok((ws_stream, _response)) => {
-                    log::info!("Successfully connected to Trouter real-time gateway!");
-                    let _ = self.tx_events.send(TrouterNotification::Connected).await;
-                    backoff_secs = 1; // Reset backoff on success
-
+                    log::info!("TCP/WebSocket connected to Trouter gateway, awaiting handshake...");
                     let (mut write, mut read) = ws_stream.split();
-                    let mut ping_ticker = interval(Duration::from_secs(25));
+                    let mut ping_ticker = interval(Duration::from_secs(30));
 
                     loop {
                         tokio::select! {
                             _ = ping_ticker.tick() => {
-                                // Engine.io ping packet '2'
-                                if let Err(e) = write.send(Message::Text("2".to_string())).await {
-                                    log::warn!("Failed to send Trouter ping: {}", e);
+                                // Trouter heartbeat ping
+                                let ping_msg = serde_json::json!({ "name": "ping" });
+                                if let Err(e) = write.send(Message::Text(format!("5:::{}", ping_msg))).await {
+                                    log::debug!("Failed to send Trouter ping: {}", e);
                                     break;
                                 }
                             }
@@ -100,11 +100,11 @@ impl TrouterClient {
                                         let _ = write.send(Message::Pong(payload)).await;
                                     }
                                     Some(Ok(Message::Close(_))) | None => {
-                                        log::warn!("Trouter WebSocket closed by remote server");
+                                        log::info!("Trouter WebSocket closed by remote server. Will reconnect in background.");
                                         break;
                                     }
                                     Some(Err(e)) => {
-                                        log::warn!("Trouter WebSocket error: {}", e);
+                                        log::debug!("Trouter WebSocket error: {}", e);
                                         break;
                                     }
                                     _ => {}
@@ -125,7 +125,7 @@ impl TrouterClient {
             }
 
             sleep(Duration::from_secs(backoff_secs)).await;
-            backoff_secs = (backoff_secs * 2).min(30);
+            backoff_secs = (backoff_secs * 2).min(60);
         }
 
         log::info!("Trouter client stopped.");
@@ -135,13 +135,50 @@ impl TrouterClient {
     where
         S: SinkExt<Message> + Unpin,
     {
-        // Engine.io protocol handling:
-        // '0' -> Handshake response: 0{"sid":"...","pingInterval":25000,...}
-        // '2' -> Server ping, respond with '3' (pong)
-        // '3' -> Server pong to our ping
-        // '42' -> Socket.io event packet: 42["message", {...}]
+        // Trouter Socket.IO protocol handling:
+        // '1::' -> Connect packet from server. Must reply with user.authenticate
+        if text.starts_with("1::") {
+            log::info!("Received Trouter connect packet (1::). Sending user.authenticate...");
+            let auth_payload = serde_json::json!({
+                "name": "user.authenticate",
+                "args": [{
+                    "headers": {
+                        "X-Ms-Test-User": "False",
+                        "X-Skypetoken": self.token,
+                        "X-MS-Migration": "True"
+                    }
+                }]
+            });
+            let auth_msg = format!("5:::{}", auth_payload);
+            let _ = write.send(Message::Text(auth_msg)).await;
+            return;
+        }
+
+        // '2' -> Engine.io ping, respond with '3' (pong)
         if text.starts_with('2') {
             let _ = write.send(Message::Text("3".to_string())).await;
+            return;
+        }
+
+        // '5:...' -> Event packet
+        if text.contains("trouter.connected") {
+            log::info!("Successfully authenticated with Trouter push gateway!");
+            let _ = self.tx_events.send(TrouterNotification::Connected).await;
+            return;
+        }
+
+        // '3:::{"id": ..., "method": "POST", "url": "/v4/f/.../unified", ...}'
+        if text.starts_with("3:::") {
+            let json_part = &text[4..];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_part) {
+                if let Some(req_id) = val.get("id") {
+                    let ack = serde_json::json!({ "id": req_id, "status": 200 });
+                    let _ = write.send(Message::Text(format!("3:::{}", ack))).await;
+                }
+                if let Some(body) = val.get("body") {
+                    self.parse_and_dispatch_event(body).await;
+                }
+            }
             return;
         }
 
@@ -155,7 +192,6 @@ impl TrouterClient {
                 }
             }
         } else if text.starts_with('{') {
-            // Raw JSON event
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(text) {
                 self.parse_and_dispatch_event(&json_val).await;
             }

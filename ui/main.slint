@@ -307,6 +307,28 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+
+                        if root.is-connected && root.conversations.length == 0: VerticalLayout {
+                            padding: 24px;
+                            spacing: 8px;
+                            alignment: center;
+
+                            Text {
+                                text: "Chưa có cuộc trò chuyện nào";
+                                color: root.is-dark-theme ? #b0b4c8 : #5a5f78;
+                                font-size: 13px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Tin nhắn mới sẽ tự động xuất hiện tại đây khi có người liên hệ.";
+                                color: root.is-dark-theme ? #787c94 : #8a8fa8;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
+                        }
                     }
                 }
             }

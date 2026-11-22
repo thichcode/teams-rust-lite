@@ -298,14 +298,15 @@ impl CoreWorker {
                 match notif {
                     TrouterNotification::Connected => {
                         let _ = tx_core.send(CoreEvent::ConnectionStatusChanged {
-                            status: "Live (Trouter Push Active)".into(),
+                            status: "Live (Push Active)".into(),
                             is_connected: true,
                         }).await;
                     }
                     TrouterNotification::Disconnected => {
+                        log::info!("Trouter push gateway disconnected, background reconnect active");
                         let _ = tx_core.send(CoreEvent::ConnectionStatusChanged {
-                            status: "Reconnecting push gateway...".into(),
-                            is_connected: false,
+                            status: "Connected (chatsvc)".into(),
+                            is_connected: true,
                         }).await;
                     }
                     TrouterNotification::NewMessage(msg) => {
