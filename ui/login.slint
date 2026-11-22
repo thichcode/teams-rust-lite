@@ -324,9 +324,17 @@ export component LoginView inherits Rectangle {
                             alignment: center;
 
                             Text {
-                                text: "Enter this code in the Microsoft sign-in page:";
+                                text: "Truy cập liên kết bên dưới và nhập mã xác thực:";
                                 font-size: 13px;
                                 color: root.is-dark-theme ? #cccccc : #555555;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: root.verification-url;
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: root.is-dark-theme ? #60cdff : #0078d4;
                                 horizontal-alignment: center;
                             }
 
@@ -357,7 +365,7 @@ export component LoginView inherits Rectangle {
                             }
 
                             Button {
-                                text: "Open Browser Again";
+                                text: "🌐 Mở lại trang web đăng nhập";
                                 clicked => { root.open-browser-login(); }
                             }
                         }

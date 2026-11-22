@@ -46,6 +46,7 @@ pub struct CoreWorker {
     current_conversation_id: Option<String>,
     latest_update_url: Option<String>,
     latest_download_url: Option<String>,
+    latest_verification_url: Option<String>,
 }
 
 impl CoreWorker {
@@ -58,6 +59,7 @@ impl CoreWorker {
             current_conversation_id: None,
             latest_update_url: None,
             latest_download_url: None,
+            latest_verification_url: None,
         }
     }
 
@@ -87,7 +89,8 @@ impl CoreWorker {
                     self.handle_login(account_type).await;
                 }
                 UiCommand::OpenBrowserLogin => {
-                    let _ = open::that("https://login.microsoft.com/device");
+                    let url = self.latest_verification_url.clone().unwrap_or_else(|| "https://login.microsoft.com/device".to_string());
+                    let _ = open::that(&url);
                 }
                 UiCommand::Logout => {
                     let _ = TokenStore::clear();
@@ -179,6 +182,7 @@ impl CoreWorker {
         });
 
         // Open browser
+        self.latest_verification_url = Some(device_code_resp.verification_uri.clone());
         log::info!("Opening browser at: {}", device_code_resp.verification_uri);
         let _ = open::that(&device_code_resp.verification_uri);
 
@@ -467,8 +471,9 @@ pub fn attach_ui_bridge(
 
 fn handle_core_event(win: &MainWindow, evt: CoreEvent) {
     match evt {
-        CoreEvent::DeviceCodeReceived { user_code, .. } => {
+        CoreEvent::DeviceCodeReceived { user_code, verification_url } => {
             win.set_login_user_code(user_code.into());
+            win.set_login_verification_url(verification_url.into());
             win.set_login_status("Code copied to clipboard! Paste it into the browser window to sign in.".into());
             win.set_is_authenticating(true);
         }

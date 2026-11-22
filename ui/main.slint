@@ -34,6 +34,7 @@ export component MainWindow inherits Window {
     in property <string> login-status: "Ready to sign in";
     in property <bool> is-authenticating: false;
     in property <string> login-user-code: "";
+    in property <string> login-verification-url: "https://www.microsoft.com/link";
 
     in property <string> user-name: "Teams User";
     in property <string> connection-status: "Connecting...";
@@ -71,6 +72,7 @@ export component MainWindow inherits Window {
         status-text: root.login-status;
         is-loading: root.is-authenticating;
         user-code: root.login-user-code;
+        verification-url: root.login-verification-url;
         app-version: root.app-version;
         is-dark-theme: root.is-dark-theme;
         theme-mode-icon: root.theme-mode-icon;

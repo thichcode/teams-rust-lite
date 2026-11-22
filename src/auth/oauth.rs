@@ -6,8 +6,13 @@ use tokio::time::sleep;
 
 use super::token_store::{AccountType, TokenData};
 
-// Standard public client ID for Microsoft Teams Web or Azure App
-pub const DEFAULT_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
+// Standard public client ID for Microsoft Teams for Work/School
+pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
+// First-party public client ID for Microsoft Office (supports Personal / Consumer accounts)
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "d3590ed6-52b3-4102-aeff-aad2292ab01c";
+
+#[allow(dead_code)]
+pub const DEFAULT_CLIENT_ID: &str = TEAMS_WORK_CLIENT_ID;
 pub const DEFAULT_SCOPES: &str = "https://api.spaces.skype.com/.default offline_access openid profile email";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +67,7 @@ impl OAuthManager {
     pub fn new(custom_client_id: Option<String>) -> Self {
         let client_id = custom_client_id
             .or_else(|| std::env::var("TEAMS_CLIENT_ID").ok())
-            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string());
+            .unwrap_or_else(|| TEAMS_WORK_CLIENT_ID.to_string());
 
         Self {
             client_id,
@@ -73,17 +78,24 @@ impl OAuthManager {
         }
     }
 
+    pub fn get_client_id(&self, account_type: AccountType) -> &str {
+        match account_type {
+            AccountType::WorkOrSchool => &self.client_id,
+            AccountType::Personal => TEAMS_PERSONAL_CLIENT_ID,
+        }
+    }
+
     /// Step 1: Request a device authorization code from Microsoft Identity Platform
     pub async fn request_device_code(&self, account_type: AccountType) -> Result<DeviceCodeResponse> {
-        let tenant = match account_type {
-            AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "common",
+        let (tenant, client_id) = match account_type {
+            AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode", tenant);
-        log::info!("Requesting device code from {} for {:?}", url, account_type);
+        log::info!("Requesting device code from {} with client_id {} for {:?}", url, client_id, account_type);
 
         let params = [
-            ("client_id", self.client_id.as_str()),
+            ("client_id", client_id),
             ("scope", DEFAULT_SCOPES),
         ];
 
@@ -111,12 +123,12 @@ impl OAuthManager {
         expires_in: u64,
         account_type: AccountType,
     ) -> Result<TokenData> {
-        let tenant = match account_type {
-            AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "common",
+        let (tenant, client_id) = match account_type {
+            AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
-        log::info!("Polling token endpoint at {} for {:?}", token_url, account_type);
+        log::info!("Polling token endpoint at {} with client_id {} for {:?}", token_url, client_id, account_type);
 
         let interval_duration = Duration::from_secs(poll_interval.max(3));
         let deadline = SystemTime::now() + Duration::from_secs(expires_in);
@@ -125,7 +137,7 @@ impl OAuthManager {
             sleep(interval_duration).await;
 
             let params = [
-                ("client_id", self.client_id.as_str()),
+                ("client_id", client_id),
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ("device_code", device_code),
             ];
@@ -195,15 +207,15 @@ impl OAuthManager {
 
     /// Refreshes the access token using a refresh token
     pub async fn refresh_token(&self, refresh_token: &str, account_type: AccountType) -> Result<TokenData> {
-        let tenant = match account_type {
-            AccountType::WorkOrSchool => "organizations",
-            AccountType::Personal => "common",
+        let (tenant, client_id) = match account_type {
+            AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
-        log::info!("Refreshing token at {} for {:?}", token_url, account_type);
+        log::info!("Refreshing token at {} with client_id {} for {:?}", token_url, client_id, account_type);
 
         let params = [
-            ("client_id", self.client_id.as_str()),
+            ("client_id", client_id),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("scope", DEFAULT_SCOPES),
