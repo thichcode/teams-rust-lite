@@ -71,81 +71,17 @@ impl TeamsChatClient {
 
     /// Exchanges the Azure AD / Skype Spaces Access Token for a Teams SkypeToken
     pub async fn exchange_skype_token(&mut self) -> Result<String> {
-        let (primary_url, fallback_url) = match self.account_type {
-            AccountType::WorkOrSchool => (DEFAULT_AUTHSVC_URL, TEAMS_LIVE_AUTHSVC_URL),
-            AccountType::Personal => (TEAMS_LIVE_AUTHSVC_URL, DEFAULT_AUTHSVC_URL),
-        };
+        let authsvc_url = DEFAULT_AUTHSVC_URL;
+        log::info!("Calling authsvc token exchange at {} for {:?}", authsvc_url, self.account_type);
 
-        log::info!("Calling primary authsvc token exchange at {} for {:?}", primary_url, self.account_type);
-        let resp_result = self.http_client
-            .post(primary_url)
+        let resp = self.http_client
+            .post(authsvc_url)
             .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
             .header(CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({}))
             .send()
-            .await;
-
-        let resp = match resp_result {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                let status = r.status();
-                let err_text = r.text().await.unwrap_or_default();
-                log::warn!("Primary authsvc ({}) failed with HTTP {}: {}. Attempting fallback to {}...", primary_url, status, err_text, fallback_url);
-                
-                // If on WorkOrSchool and failed with GuestUserNotRedeemed, switch account type to Personal
-                if err_text.contains("GuestUserNotRedeemed") || err_text.contains("User is not redeemed") {
-                    log::info!("GuestUserNotRedeemed detected: switching client account type to Personal");
-                    self.account_type = AccountType::Personal;
-                    self.base_url = TEAMS_LIVE_CHATSVC_URL.trim_end_matches('/').to_string();
-                }
-
-                let fallback_resp = self.http_client
-                    .post(fallback_url)
-                    .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
-                    .header(CONTENT_TYPE, "application/json")
-                    .json(&serde_json::json!({}))
-                    .send()
-                    .await
-                    .context("Failed to connect to fallback authsvc")?;
-
-                if !fallback_resp.status().is_success() {
-                    let fb_status = fallback_resp.status();
-                    let fb_err = fallback_resp.text().await.unwrap_or_default();
-                    log::error!("Fallback authsvc ({}) also failed (HTTP {}): {}", fallback_url, fb_status, fb_err);
-                    bail!("authsvc token exchange failed on both endpoints. Primary: HTTP {} ({}), Fallback: HTTP {} ({})", status, err_text, fb_status, fb_err);
-                }
-
-                if fallback_url == TEAMS_LIVE_AUTHSVC_URL {
-                    self.account_type = AccountType::Personal;
-                    self.base_url = TEAMS_LIVE_CHATSVC_URL.trim_end_matches('/').to_string();
-                }
-                fallback_resp
-            }
-            Err(e) => {
-                log::warn!("Connection to primary authsvc ({}) failed: {}. Attempting fallback to {}...", primary_url, e, fallback_url);
-                let fallback_resp = self.http_client
-                    .post(fallback_url)
-                    .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
-                    .header(CONTENT_TYPE, "application/json")
-                    .json(&serde_json::json!({}))
-                    .send()
-                    .await
-                    .context("Failed to connect to fallback authsvc")?;
-
-                if !fallback_resp.status().is_success() {
-                    let fb_status = fallback_resp.status();
-                    let fb_err = fallback_resp.text().await.unwrap_or_default();
-                    log::error!("Fallback authsvc ({}) failed (HTTP {}): {}", fallback_url, fb_status, fb_err);
-                    bail!("authsvc token exchange failed: {}", fb_err);
-                }
-
-                if fallback_url == TEAMS_LIVE_AUTHSVC_URL {
-                    self.account_type = AccountType::Personal;
-                    self.base_url = TEAMS_LIVE_CHATSVC_URL.trim_end_matches('/').to_string();
-                }
-                fallback_resp
-            }
-        };
+            .await
+            .context("Failed to connect to Teams authsvc")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
