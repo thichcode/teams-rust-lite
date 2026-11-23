@@ -84,14 +84,24 @@ impl TeamsChatClient {
             return Ok(tok.clone());
         }
 
-        let candidates: Vec<(&str, &str)> = vec![
-            (DEFAULT_AUTHSVC_URL, "POST"),
-            (FALLBACK_AUTHSVC_URL, "POST"),
-            (TEAMS_LIVE_AUTHSVC_URL, "POST"),
-            ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
-            (DEFAULT_AUTHSVC_URL, "GET"),
-            ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
-        ];
+        let candidates: Vec<(&str, &str)> = match self.account_type {
+            AccountType::Personal => vec![
+                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
+                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+                (DEFAULT_AUTHSVC_URL, "POST"),
+                (FALLBACK_AUTHSVC_URL, "POST"),
+                (DEFAULT_AUTHSVC_URL, "GET"),
+                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
+            ],
+            AccountType::WorkOrSchool => vec![
+                (DEFAULT_AUTHSVC_URL, "POST"),
+                (FALLBACK_AUTHSVC_URL, "POST"),
+                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
+                (DEFAULT_AUTHSVC_URL, "GET"),
+                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
+            ],
+        };
 
         let mut last_err = String::new();
         for (auth_url, method) in candidates {

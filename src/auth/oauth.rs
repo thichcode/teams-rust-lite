@@ -12,8 +12,8 @@ use super::token_store::{AccountType, TokenData};
 
 // Standard public client ID for Microsoft Teams Desktop (Work/School only)
 pub const TEAMS_WORK_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
-// First-party public client ID for Microsoft Teams Desktop, authorized for Personal (common tenant) and Work/School
-pub const TEAMS_PERSONAL_CLIENT_ID: &str = "1fec8e78-bce4-4aaf-ab1b-5451cc387264";
+// First-party public client ID for Microsoft Teams Personal / Teams for Life (Teams-T4L)
+pub const TEAMS_PERSONAL_CLIENT_ID: &str = "8ec6bc83-69c8-4392-8f08-b3c986009232";
 // Fallback redirect URI
 #[allow(dead_code)]
 pub const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
@@ -96,7 +96,7 @@ impl OAuthManager {
     pub async fn request_device_code(&self, account_type: AccountType) -> Result<DeviceCodeResponse> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode", tenant);
         log::info!("Requesting device code from {} with client_id {} for {:?}", url, client_id, account_type);
@@ -132,7 +132,7 @@ impl OAuthManager {
     ) -> Result<TokenData> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Polling token endpoint at {} with client_id {} for {:?}", token_url, client_id, account_type);
@@ -216,7 +216,7 @@ impl OAuthManager {
     pub async fn refresh_token(&self, refresh_token: &str, account_type: AccountType) -> Result<TokenData> {
         let (tenant, client_id) = match account_type {
             AccountType::WorkOrSchool => ("organizations", self.get_client_id(account_type)),
-            AccountType::Personal => ("common", TEAMS_PERSONAL_CLIENT_ID),
+            AccountType::Personal => ("consumers", TEAMS_PERSONAL_CLIENT_ID),
         };
         let token_url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant);
         log::info!("Refreshing token at {} with client_id {} for {:?}", token_url, client_id, account_type);
@@ -276,7 +276,7 @@ impl OAuthManager {
             ),
             AccountType::Personal => (
                 TEAMS_PERSONAL_CLIENT_ID,
-                "common",
+                "consumers",
             ),
         };
 
@@ -595,3 +595,30 @@ function submitUrl(){
 document.getElementById('url-input').addEventListener('keypress',function(e){if(e.key==='Enter')submitUrl()});
 </script>
 </body></html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_id_by_account_type() {
+        let oauth = OAuthManager::new(None);
+        assert_eq!(oauth.get_client_id(AccountType::WorkOrSchool), TEAMS_WORK_CLIENT_ID);
+        assert_eq!(oauth.get_client_id(AccountType::Personal), "8ec6bc83-69c8-4392-8f08-b3c986009232");
+    }
+
+    #[test]
+    fn test_jwt_claims_parsing() {
+        // Sample mock JWT with preferred_username and name
+        let header = "eyJhbGciOiJub25lIn0";
+        let payload = "eyJuYW1lIjoiVGVzdCBVc2VyIiwicHJlZmVycmVkX3VzZXJuYW1lIjoidGVzdEBob3RtYWlsLmNvbSIsInN1YiI6InVpZDEyMyJ9";
+        let mock_jwt = format!("{}.{}.", header, payload);
+
+        let parsed = parse_jwt_claims(&mock_jwt);
+        assert!(parsed.is_some());
+        let (name, email, uid) = parsed.unwrap();
+        assert_eq!(name, Some("Test User".into()));
+        assert_eq!(email, Some("test@hotmail.com".into()));
+        assert_eq!(uid, Some("uid123".into()));
+    }
+}
