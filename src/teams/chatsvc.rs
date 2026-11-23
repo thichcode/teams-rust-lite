@@ -49,11 +49,7 @@ impl TeamsChatClient {
             .build()
             .unwrap_or_default();
 
-        let skype_token = if access_token.starts_with("eyJ") {
-            Some(access_token.clone())
-        } else {
-            None
-        };
+        let skype_token = None;
 
         Self {
             base_url,
@@ -88,23 +84,14 @@ impl TeamsChatClient {
             return Ok(tok.clone());
         }
 
-        let candidates: Vec<(&str, &str)> = match self.account_type {
-            AccountType::Personal => vec![
-                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
-                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
-                (DEFAULT_AUTHSVC_URL, "POST"),
-                (DEFAULT_AUTHSVC_URL, "GET"),
-                (FALLBACK_AUTHSVC_URL, "POST"),
-                ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
-            ],
-            AccountType::WorkOrSchool => vec![
-                (DEFAULT_AUTHSVC_URL, "POST"),
-                (DEFAULT_AUTHSVC_URL, "GET"),
-                (FALLBACK_AUTHSVC_URL, "POST"),
-                (TEAMS_LIVE_AUTHSVC_URL, "POST"),
-                ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
-            ],
-        };
+        let candidates: Vec<(&str, &str)> = vec![
+            (DEFAULT_AUTHSVC_URL, "POST"),
+            (FALLBACK_AUTHSVC_URL, "POST"),
+            (TEAMS_LIVE_AUTHSVC_URL, "POST"),
+            ("https://teams.live.com/api/auth/v1.0/authz/consumer", "POST"),
+            (DEFAULT_AUTHSVC_URL, "GET"),
+            ("https://teams.live.com/api/authsvc/v1.0/authz", "GET"),
+        ];
 
         let mut last_err = String::new();
         for (auth_url, method) in candidates {
@@ -482,7 +469,8 @@ mod tests {
         assert_eq!(built.headers().get("Authorization").unwrap(), "skypetoken=skype_456");
         assert_eq!(built.headers().get("x-skypetoken").unwrap(), "skype_456");
 
-        let client_personal = TeamsChatClient::new("eyJ_skype_personal_789".into(), AccountType::Personal, None);
+        let mut client_personal = TeamsChatClient::new("bearer_personal_789".into(), AccountType::Personal, None);
+        client_personal.set_skype_token(Some("eyJ_skype_personal_789".into()));
         let req = reqwest::Client::new().get("https://example.com");
         let req = client_personal.apply_auth(req);
         let built = req.build().unwrap();
