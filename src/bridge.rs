@@ -258,15 +258,10 @@ impl CoreWorker {
                 skype_tok
             }
             Err(e) => {
-                log::warn!("authsvc token exchange failed: {}. Falling back to access_token...", e);
-                let err_str = e.to_string();
-                if err_str.contains("401") || err_str.contains("Unauthorized") {
-                    log::error!("Access token rejected by authsvc (HTTP 401). Invalidating stored session.");
-                    let _ = TokenStore::clear();
-                    let _ = self.tx_event.send(CoreEvent::AuthFailed("Phiên làm việc không hợp lệ (HTTP 401). Vui lòng đăng nhập lại.".into())).await;
-                    return;
-                }
-                access_tok.clone()
+                log::error!("authsvc token exchange failed: {}. Cannot continue without SkypeToken.", e);
+                let _ = TokenStore::clear();
+                let _ = self.tx_event.send(CoreEvent::AuthFailed(format!("Xác thực máy chủ Teams thất bại: {:#}. Vui lòng thử lại.", e))).await;
+                return;
             }
         };
 

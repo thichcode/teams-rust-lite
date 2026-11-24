@@ -118,7 +118,9 @@ impl TeamsChatClient {
 
             let req_builder = req_builder
                 .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
-                .header("Accept", "application/json");
+                .header("Accept", "application/json")
+                .header("X-Ms-Skip-Phone", "true")
+                .header("x-ms-client-env", "personal");
 
             match req_builder.send().await {
                 Ok(resp) => {
